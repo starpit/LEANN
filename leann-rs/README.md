@@ -8,7 +8,7 @@ LEANN-rs is a full rewrite of the Python LEANN system in Rust, providing:
 
 - **Pure Rust HNSW engine** -- build and search without FAISS or any C++ dependencies
 - **Embedding recomputation** -- prune stored embeddings and recompute on-the-fly via ZMQ, reducing index size by ~97%
-- **Multiple embedding backends** -- OpenAI, Ollama, Gemini APIs (ONNX local inference planned)
+- **Multiple embedding backends** -- OpenAI, Ollama (pipelined async), Gemini APIs (ONNX local inference planned)
 - **RAG pipeline** -- search + LLM chat with Ollama, OpenAI, and Anthropic providers
 - **Python bindings** -- PyO3-based native module, drop-in replacement for the Python version
 - **HTTP server** -- Axum-based REST API for search
@@ -210,6 +210,37 @@ A LEANN index consists of:
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible API base URL |
 | `PORT` | `8080` | HTTP server port |
 | `LEANN_INDEX_DIR` | `.` | Directory for index storage (server) |
+
+## Benchmarks
+
+Criterion benchmarks for the pure-Rust HNSW engine, plus a comparison suite against the Python FAISS C++ backend:
+
+```bash
+# Run Criterion benchmarks (HTML reports in target/criterion/)
+cargo bench --package leann-core
+
+# Run a specific benchmark group
+cargo bench --package leann-core -- "distance"
+
+# JSON output for scripted comparison
+cargo bench --package leann-core --bench bench_json_output
+
+# Full Rust vs Python (FAISS C++) comparison
+cd /path/to/LEANN && bash benchmarks/compare_rust_python.sh
+
+# Skip 50K-vector benchmarks for faster runs
+SKIP_LARGE=1 bash benchmarks/compare_rust_python.sh
+```
+
+### Benchmark groups
+
+| Group | What it measures |
+|-------|-----------------|
+| `distance` | SIMD (NEON/AVX2) L2 and inner product at dims 128, 384, 768 |
+| `hnsw_build` | Graph construction at 100, 1K, 10K, 50K vectors (M=32, efConstruction=200) |
+| `hnsw_search` | Stored-vector search at ef_search 16/32/64/128/256 (10K vectors, top_k=10) |
+| `hnsw_search_recompute` | Recompute-mode search with in-memory callback at same ef values |
+| `full_pipeline` | Build + write + read + search at 100, 1K, 10K vectors |
 
 ## Development
 

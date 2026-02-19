@@ -9,7 +9,7 @@ use super::simd::{inner_product_distance, l2_distance, VisitedList};
 use crate::index::DistanceMetric;
 
 /// A candidate neighbor during search/build.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct Candidate {
     distance: f32,
     id: usize,
@@ -118,6 +118,12 @@ pub fn build_hnsw(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGraph> 
     // Allocate a single visited list, reused across all levels/nodes
     let mut visited = VisitedList::new(n);
 
+    // Pre-allocate reusable buffers outside the hot loop to avoid repeated alloc/realloc.
+    // ef_construction bounds the result size; candidates can grow larger during search.
+    let ef = config.ef_construction;
+    let mut candidates = BinaryHeap::with_capacity(ef * 2 * m);
+    let mut result: Vec<Candidate> = Vec::with_capacity(ef);
+
     for i in 0..n {
         let node_level = levels[i] - 1; // max level for this node
 
@@ -132,6 +138,7 @@ pub fn build_hnsw(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGraph> 
         // Phase 1: Traverse from top level down to node_level+1 (greedy search to find entry point)
         let mut curr_entry = entry_point as usize;
         for level in (node_level as usize + 1..=max_level as usize).rev() {
+            let mut d_curr = dist_fn(query_slice, data.row(curr_entry).as_slice().unwrap());
             loop {
                 let mut changed = false;
                 let neighbor_slice = get_neighbors_mut_slice(
@@ -146,12 +153,10 @@ pub fn build_hnsw(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGraph> 
                         continue;
                     }
                     let nb = nb as usize;
-                    let nb_vec = data.row(nb);
-                    let curr_vec = data.row(curr_entry);
-                    let d_nb = dist_fn(query_slice, nb_vec.as_slice().unwrap());
-                    let d_curr = dist_fn(query_slice, curr_vec.as_slice().unwrap());
+                    let d_nb = dist_fn(query_slice, data.row(nb).as_slice().unwrap());
                     if d_nb < d_curr {
                         curr_entry = nb;
+                        d_curr = d_nb;
                         changed = true;
                     }
                 }
@@ -164,11 +169,11 @@ pub fn build_hnsw(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGraph> 
         // Phase 2: For each level from min(node_level, max_level) down to 0,
         // do greedy search to find ef_construction nearest neighbors, then connect
         for level in (0..=node_level as usize).rev() {
-            let ef = config.ef_construction;
             let max_neighbors = if level == 0 { 2 * m } else { m };
 
-            // Greedy search for ef candidates
-            let mut candidates = BinaryHeap::new();
+            // Reuse pre-allocated buffers (clear is O(1) for len, keeps capacity)
+            candidates.clear();
+            result.clear();
             visited.reset();
             visited.set(i);
 
@@ -178,8 +183,6 @@ pub fn build_hnsw(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGraph> 
                 id: curr_entry,
             });
             visited.set(curr_entry);
-
-            let mut result: Vec<Candidate> = Vec::new();
 
             while let Some(cand) = candidates.pop() {
                 // If we have enough results and the candidate is worse than the worst result, stop
@@ -191,7 +194,7 @@ pub fn build_hnsw(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGraph> 
                     }
                 }
 
-                result.push(cand.clone());
+                result.push(cand);
 
                 // Explore neighbors
                 let nb_slice = get_neighbors_mut_slice(
@@ -219,7 +222,7 @@ pub fn build_hnsw(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGraph> 
             }
 
             // Sort results by distance and take top max_neighbors
-            result.sort_by(|a, b| {
+            result.sort_unstable_by(|a, b| {
                 a.distance
                     .partial_cmp(&b.distance)
                     .unwrap_or(Ordering::Equal)

@@ -4,7 +4,7 @@
 
 **8,500+ lines of Rust across 4 crates. 143 tests passing (50 unit + 93 integration). 0 errors, 0 warnings.**
 
-All 8 phases of the initial implementation are complete. CLI has been aligned with Python CLI options and semantics. What remains is hardening: integration tests, ONNX Runtime activation, Python example porting, and CI setup.
+All 8 phases of the initial implementation are complete. CLI has been aligned with Python CLI options and semantics. Criterion benchmark suite added for performance validation against Python FAISS. What remains is hardening: integration tests, ONNX Runtime activation, Python example porting, and CI setup.
 
 ### Crate Status
 
@@ -21,6 +21,9 @@ All 8 phases of the initial implementation are complete. CLI has been aligned wi
 leann-rs/
   Cargo.toml                         # workspace root
   crates/
+    leann-core/benches/
+      hnsw_benchmarks.rs       (193)  # Criterion benchmarks: distance, build, search, recompute, pipeline
+      bench_json_output.rs     (205)  # Standalone JSON output benchmark binary
     leann-core/src/
       lib.rs                    (22)  # Module declarations + re-exports
       search_result.rs          (72)  # SearchResult struct [3 tests]
@@ -47,7 +50,7 @@ leann-rs/
         server.rs              (237)  # ZMQ REP server (3 request types)
         manager.rs             (215)  # Subprocess lifecycle, port allocation
         openai.rs              (107)  # OpenAI embedding API
-        ollama.rs               (83)  # Ollama embedding API
+        ollama.rs              (259)  # Ollama embedding API (pipelined async)
         gemini.rs              (100)  # Gemini batch embedding API
         onnx.rs                (102)  # ONNX Runtime scaffold (not yet activated)
       chunking/
@@ -205,7 +208,7 @@ PyO3 0.25 used for leann-python (standalone crate, Python 3.14 compatible).
 
 ### 4e. API Embedding Clients [COMPLETE]
 - `openai.rs`: OpenAI embedding API via reqwest blocking, configurable base_url and dimensions
-- `ollama.rs`: Ollama embedding API via reqwest blocking
+- `ollama.rs`: Ollama embedding API with pipelined async dispatch — up to 3 concurrent in-flight requests via `tokio::spawn` + `Semaphore` to keep the GPU saturated between batches (batch size 128, `reqwest::Client` async)
 - `gemini.rs`: Gemini batch embedding API (batchEmbedContents endpoint)
 
 ---
@@ -575,7 +578,7 @@ Uses `axum::test` helpers or spawns server on a random port.
 ### Low Priority / Deferred
 11. **DiskANN backend** — Deferred per plan; HNSW-only for now
 12. **Format compatibility tests** — Reading indexes built by the Python version
-13. **Recall benchmarks** — Compare against FAISS baseline
+13. ~~**Recall benchmarks**~~ — DONE: Criterion benchmark suite + Rust vs Python comparison at `benchmarks/` (distance, build, search, recompute, full pipeline, index size)
 14. **MLX embedding provider** — Apple Silicon specific; defer
 15. **HuggingFace chat provider** — Local model inference; defer to ONNX/Ollama
 
@@ -600,6 +603,6 @@ Uses `axum::test` helpers or spawns server on a random port.
 2. **CLI conformance**: Rust CLI options aligned with Python CLI (2026-02-19) — verified via `--help` output comparison
 3. **End-to-end tests**: 93 integration tests passing across 9 test files (see End-to-End Test Plan above). Coverage: core build/search pipeline (13 tests), BM25 keyword search (8 tests), hybrid/grep search via LeannSearcher (7 tests), metadata filtering with all 13 operators (18 tests), document loading + AST chunking (17 tests), file sync/Merkle tree (7 tests), index file format validation (7 tests), chat/LLM pipeline (5 tests), CLI subprocess/help tests (7 tests), HTTP server endpoints (4 tests). All use FakeEmbeddingProvider for deterministic, network-free execution.
 4. **Python binding tests**: Not yet written — port tests/test_basic.py, tests/test_metadata_filtering.py, tests/test_hybrid_search.py
-5. **Benchmark**: Not yet run — compare search latency and index build time against current Python+FAISS
+5. **Benchmark**: Criterion benchmark suite implemented (`cargo bench --package leann-core`) with 5 groups: distance computation (SIMD at 128/384/768 dims), HNSW build (100/1K/10K/50K), HNSW search (ef 16-256), HNSW search recompute (ef 16-256), full pipeline (build+write+read+search). JSON output binary for scripted comparison. Python FAISS comparison suite at `benchmarks/` with orchestration script (`benchmarks/compare_rust_python.sh`).
 6. **Format compatibility**: Not yet tested — reading indexes built by Python version
 7. **Cross-platform**: Not yet set up — CI for Linux (x86_64), macOS (ARM64), Windows
