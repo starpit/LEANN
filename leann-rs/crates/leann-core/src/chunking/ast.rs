@@ -393,6 +393,18 @@ fn split_large_block(lines: &[&str], max_size: usize) -> Vec<String> {
             chunks.push(current.clone());
             current.clear();
         }
+
+        // If a single line exceeds max_size, split it by characters
+        if line.len() > max_size && current.is_empty() {
+            let mut offset = 0;
+            while offset < line.len() {
+                let end = (offset + max_size).min(line.len());
+                chunks.push(line[offset..end].to_string());
+                offset = end;
+            }
+            continue;
+        }
+
         if !current.is_empty() {
             current.push('\n');
         }

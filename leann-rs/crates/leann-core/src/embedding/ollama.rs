@@ -80,10 +80,41 @@ impl OllamaEmbedding {
             Ok(embeddings) => Ok(embeddings),
             Err(OllamaBatchError::ContextLength) => {
                 if chunks.len() == 1 {
+                    // Truncate the oversized chunk and retry instead of crashing.
+                    // Binary-search for the largest prefix that fits.
+                    let original_len = chunks[0].len();
+                    let mut lo = 0usize;
+                    let mut hi = original_len;
+                    let mut last_good = None;
+
+                    while lo < hi {
+                        let mid = (lo + hi) / 2;
+                        let truncated = vec![chunks[0][..mid].to_string()];
+                        match self.embed_batch(&truncated) {
+                            Ok(emb) => {
+                                last_good = Some(emb);
+                                lo = mid + 1;
+                            }
+                            Err(OllamaBatchError::ContextLength) => {
+                                hi = mid;
+                            }
+                            Err(OllamaBatchError::Other(e)) => return Err(e),
+                        }
+                    }
+
+                    if let Some(embeddings) = last_good {
+                        warn!(
+                            "Truncated oversized chunk from {} to ~{} chars to fit Ollama context",
+                            original_len,
+                            lo.saturating_sub(1)
+                        );
+                        return Ok(embeddings);
+                    }
+
                     anyhow::bail!(
-                        "Single chunk exceeds Ollama context length ({} chars). \
-                         Reduce chunk size or use a model with a larger context window.",
-                        chunks[0].len()
+                        "Single chunk exceeds Ollama context length ({} chars) \
+                         and could not be truncated to fit.",
+                        original_len
                     );
                 }
                 let smaller = batch_size / 2;

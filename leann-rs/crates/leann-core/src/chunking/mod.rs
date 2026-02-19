@@ -29,6 +29,17 @@ pub fn chunk_text(text: &str, chunk_size: usize, chunk_overlap: usize) -> Vec<St
             }
         }
 
+        // If a single sentence exceeds chunk_size, split it by characters
+        if sent_len > chunk_size && current_chunk.is_empty() {
+            let mut offset = 0;
+            while offset < sent_len {
+                let end = (offset + chunk_size).min(sent_len);
+                chunks.push(sent[offset..end].trim().to_string());
+                offset = end;
+            }
+            continue;
+        }
+
         if !current_chunk.is_empty() {
             current_chunk.push(' ');
             current_len += 1;
