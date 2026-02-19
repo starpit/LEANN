@@ -79,8 +79,8 @@ enum Commands {
         #[arg(long, default_value = "64")]
         complexity: usize,
 
-        /// Number of threads
-        #[arg(long, default_value = "1")]
+        /// Number of threads for HNSW construction (default: all cores)
+        #[arg(long, default_value_t = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1))]
         num_threads: usize,
 
         /// Use compact storage (default: true). Must use --no-compact for --no-recompute build.
@@ -383,7 +383,7 @@ fn main() -> Result<()> {
                 force,
                 graph_degree,
                 complexity,
-                _num_threads: num_threads,
+                num_threads,
                 compact: !no_compact,     // default true unless --no-compact
                 recompute: !no_recompute, // default true unless --no-recompute
                 file_types,
@@ -522,7 +522,7 @@ struct BuildArgs {
     force: bool,
     graph_degree: usize,
     complexity: usize,
-    _num_threads: usize,
+    num_threads: usize,
     compact: bool,
     recompute: bool,
     file_types: Option<String>,
@@ -633,7 +633,8 @@ fn cmd_build(args: BuildArgs) -> Result<()> {
         .with_ef_construction(args.complexity)
         .with_distance_metric(metric)
         .with_compact(args.compact)
-        .with_recompute(args.recompute);
+        .with_recompute(args.recompute)
+        .with_num_threads(args.num_threads);
 
     // Chunk and add documents
     let mut total_chunks = 0;

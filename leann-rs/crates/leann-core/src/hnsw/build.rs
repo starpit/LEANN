@@ -3,6 +3,9 @@ use ndarray::Array2;
 use rand::Rng;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
+use std::sync::atomic::{AtomicI32, Ordering as AtomicOrdering};
+
+use rayon::prelude::*;
 
 use super::graph::*;
 use super::simd::{inner_product_distance, l2_distance, VisitedList};
@@ -47,8 +50,27 @@ fn select_dist_fn(metric: DistanceMetric) -> fn(&[f32], &[f32]) -> f32 {
     }
 }
 
-/// Build an HNSW graph from dense vectors.
+/// Build an HNSW graph from dense vectors (single-threaded).
 pub fn build_hnsw(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGraph> {
+    build_hnsw_serial(data, config)
+}
+
+/// Build an HNSW graph with the specified number of threads.
+/// Falls back to the serial path when `num_threads <= 1`.
+pub fn build_hnsw_with_threads(
+    data: &Array2<f32>,
+    config: &HnswConfig,
+    num_threads: usize,
+) -> Result<HnswGraph> {
+    if num_threads <= 1 {
+        build_hnsw_serial(data, config)
+    } else {
+        build_hnsw_parallel(data, config, num_threads)
+    }
+}
+
+/// Serial HNSW build (original implementation).
+fn build_hnsw_serial(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGraph> {
     let n = data.nrows();
     let d = data.ncols();
 
@@ -261,7 +283,277 @@ pub fn build_hnsw(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGraph> 
         }
     }
 
-    // Build assign_probas
+    finalize_graph(
+        data,
+        config,
+        entry_point,
+        max_level,
+        levels,
+        cum_nneighbor_per_level,
+        offsets,
+        neighbors,
+    )
+}
+
+/// Parallel HNSW build using rayon and lock-free atomics.
+fn build_hnsw_parallel(
+    data: &Array2<f32>,
+    config: &HnswConfig,
+    num_threads: usize,
+) -> Result<HnswGraph> {
+    let n = data.nrows();
+
+    if n == 0 {
+        anyhow::bail!("Cannot build HNSW from empty data");
+    }
+
+    let m = config.m;
+    let ml = 1.0 / (m as f64).ln();
+    let ef = config.ef_construction;
+    let dist_fn = select_dist_fn(config.distance_metric);
+
+    // Assign levels (sequential, fast)
+    let mut rng = rand::thread_rng();
+    let mut levels = Vec::with_capacity(n);
+    let mut max_level: i32 = 0;
+
+    for _ in 0..n {
+        let r: f64 = rng.gen::<f64>();
+        let level = (-r.ln() * ml).floor() as i32;
+        let level = level.max(0);
+        if level > max_level {
+            max_level = level;
+        }
+        levels.push(level + 1);
+    }
+
+    let num_levels = (max_level + 1) as usize;
+    let mut cum_nneighbor_per_level = Vec::with_capacity(num_levels);
+    let mut cum = 0i32;
+    for l in 0..num_levels {
+        let nb_neighbors = if l == 0 { 2 * m } else { m };
+        cum += nb_neighbors as i32;
+        cum_nneighbor_per_level.push(cum);
+    }
+
+    // Build offsets (sequential, fast)
+    let mut offsets = Vec::with_capacity(n + 1);
+    let mut current_offset = 0u64;
+    for i in 0..n {
+        offsets.push(current_offset);
+        let node_levels = levels[i] as usize;
+        let node_neighbors = if node_levels == 0 {
+            0
+        } else {
+            let idx = (node_levels - 1).min(cum_nneighbor_per_level.len() - 1);
+            cum_nneighbor_per_level[idx] as usize
+        };
+        current_offset += node_neighbors as u64;
+    }
+    offsets.push(current_offset);
+
+    let total_neighbor_slots = current_offset as usize;
+
+    // Atomic neighbor array — each slot is independently CAS-able
+    let neighbors: Vec<AtomicI32> = (0..total_neighbor_slots)
+        .map(|_| AtomicI32::new(-1))
+        .collect();
+
+    // Atomic entry point (updated via CAS when a higher-level node appears)
+    let entry_point = AtomicI32::new(0);
+
+    // Build a scoped rayon thread pool (does not touch the global pool)
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(num_threads)
+        .build()?;
+
+    pool.install(|| {
+        (1..n).into_par_iter().for_each_init(
+            // Per-thread buffer allocation (runs once per rayon worker)
+            || {
+                (
+                    VisitedList::new(n),
+                    BinaryHeap::with_capacity(ef * 2 * m),
+                    Vec::<Candidate>::with_capacity(ef),
+                )
+            },
+            |(visited, candidates, result), i| {
+                let node_level = levels[i] - 1;
+
+                let query = data.row(i);
+                let query_slice = query.as_slice().unwrap();
+
+                // Phase 1: greedy descent from top level to node_level+1
+                let mut curr_entry = entry_point.load(AtomicOrdering::Relaxed) as usize;
+                for level in (node_level as usize + 1..=max_level as usize).rev() {
+                    let mut d_curr = dist_fn(query_slice, data.row(curr_entry).as_slice().unwrap());
+                    loop {
+                        let mut changed = false;
+                        let nb_slice = get_neighbors_atomic_slice(
+                            &neighbors,
+                            &offsets,
+                            &cum_nneighbor_per_level,
+                            curr_entry,
+                            level,
+                        );
+                        for atom in nb_slice {
+                            let nb = atom.load(AtomicOrdering::Relaxed);
+                            if nb < 0 {
+                                continue;
+                            }
+                            let nb = nb as usize;
+                            let d_nb = dist_fn(query_slice, data.row(nb).as_slice().unwrap());
+                            if d_nb < d_curr {
+                                curr_entry = nb;
+                                d_curr = d_nb;
+                                changed = true;
+                            }
+                        }
+                        if !changed {
+                            break;
+                        }
+                    }
+                }
+
+                // Phase 2: search & connect at each level from node_level down to 0
+                for level in (0..=node_level as usize).rev() {
+                    let max_neighbors = if level == 0 { 2 * m } else { m };
+
+                    candidates.clear();
+                    result.clear();
+                    visited.reset();
+                    visited.set(i);
+
+                    let d_entry = dist_fn(query_slice, data.row(curr_entry).as_slice().unwrap());
+                    candidates.push(Candidate {
+                        distance: d_entry,
+                        id: curr_entry,
+                    });
+                    visited.set(curr_entry);
+
+                    while let Some(cand) = candidates.pop() {
+                        if result.len() >= ef {
+                            if let Some(worst) = result.last() {
+                                if cand.distance > worst.distance {
+                                    break;
+                                }
+                            }
+                        }
+
+                        result.push(cand);
+
+                        let nb_slice = get_neighbors_atomic_slice(
+                            &neighbors,
+                            &offsets,
+                            &cum_nneighbor_per_level,
+                            cand.id,
+                            level,
+                        );
+                        for atom in nb_slice {
+                            let nb = atom.load(AtomicOrdering::Relaxed);
+                            if nb < 0 {
+                                continue;
+                            }
+                            let nb = nb as usize;
+                            if visited.is_visited(nb) {
+                                continue;
+                            }
+                            visited.set(nb);
+                            let d_nb = dist_fn(query_slice, data.row(nb).as_slice().unwrap());
+                            candidates.push(Candidate {
+                                distance: d_nb,
+                                id: nb,
+                            });
+                        }
+                    }
+
+                    result.sort_unstable_by(|a, b| {
+                        a.distance
+                            .partial_cmp(&b.distance)
+                            .unwrap_or(Ordering::Equal)
+                    });
+                    result.truncate(max_neighbors);
+
+                    // Forward connections: only this thread writes to node i's slots
+                    let range = get_neighbor_range(&offsets, &cum_nneighbor_per_level, i, level);
+                    for (slot, cand) in range.zip(result.iter()) {
+                        neighbors[slot].store(cand.id as i32, AtomicOrdering::Relaxed);
+                    }
+
+                    // Reverse connections via CAS
+                    for cand in result.iter() {
+                        add_reverse_connection_atomic(
+                            &neighbors,
+                            &offsets,
+                            &cum_nneighbor_per_level,
+                            cand.id,
+                            i as i32,
+                            level,
+                            data,
+                            dist_fn,
+                        );
+                    }
+
+                    if !result.is_empty() {
+                        curr_entry = result[0].id;
+                    }
+                }
+
+                // CAS-update entry point if this node has a higher level
+                loop {
+                    let ep = entry_point.load(AtomicOrdering::Relaxed);
+                    if node_level <= levels[ep as usize] - 1 {
+                        break;
+                    }
+                    if entry_point
+                        .compare_exchange_weak(
+                            ep,
+                            i as i32,
+                            AtomicOrdering::Relaxed,
+                            AtomicOrdering::Relaxed,
+                        )
+                        .is_ok()
+                    {
+                        break;
+                    }
+                }
+            },
+        );
+    });
+
+    // Convert AtomicI32 → i32 (zero-cost: same layout, into_inner consumes)
+    let neighbors_i32: Vec<i32> = neighbors.into_iter().map(|a| a.into_inner()).collect();
+    let final_entry_point = entry_point.into_inner();
+
+    finalize_graph(
+        data,
+        config,
+        final_entry_point,
+        max_level,
+        levels,
+        cum_nneighbor_per_level,
+        offsets,
+        neighbors_i32,
+    )
+}
+
+/// Shared graph finalization: build assign_probas and construct HnswGraph.
+fn finalize_graph(
+    data: &Array2<f32>,
+    config: &HnswConfig,
+    entry_point: i32,
+    max_level: i32,
+    levels: Vec<i32>,
+    cum_nneighbor_per_level: Vec<i32>,
+    offsets: Vec<u64>,
+    neighbors: Vec<i32>,
+) -> Result<HnswGraph> {
+    let n = data.nrows();
+    let d = data.ncols();
+    let m = config.m;
+    let ml = 1.0 / (m as f64).ln();
+    let num_levels = (max_level + 1) as usize;
+
     let mut assign_probas = Vec::with_capacity(num_levels);
     for l in 0..num_levels {
         let p = if l == 0 {
@@ -287,13 +579,15 @@ pub fn build_hnsw(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGraph> 
         },
         metric_arg: 0.0,
         storage: GraphStorage::Standard { offsets, neighbors },
-        vector_storage: VectorStorage::Null, // Will be set by caller if needed
+        vector_storage: VectorStorage::Null,
     };
 
     Ok(graph)
 }
 
-// Helper functions for neighbor access during build
+// ---------------------------------------------------------------------------
+// Helper functions for neighbor access
+// ---------------------------------------------------------------------------
 
 fn get_neighbor_range(
     offsets: &[u64],
@@ -318,6 +612,22 @@ fn get_neighbors_mut_slice<'a>(
     node: usize,
     level: usize,
 ) -> &'a [i32] {
+    let range = get_neighbor_range(offsets, cum_nn, node, level);
+    if range.end <= neighbors.len() {
+        &neighbors[range]
+    } else {
+        &[]
+    }
+}
+
+/// Read a neighbor slice from atomic storage (parallel path).
+fn get_neighbors_atomic_slice<'a>(
+    neighbors: &'a [AtomicI32],
+    offsets: &[u64],
+    cum_nn: &[i32],
+    node: usize,
+    level: usize,
+) -> &'a [AtomicI32] {
     let range = get_neighbor_range(offsets, cum_nn, node, level);
     if range.end <= neighbors.len() {
         &neighbors[range]
@@ -375,6 +685,74 @@ fn add_reverse_connection(
     }
 }
 
+/// Lock-free reverse connection using CAS (parallel path).
+/// Empty slot: CAS(-1, source). Replace worst: single CAS attempt — if lost, give up.
+/// HNSW is robust to slight suboptimality from lost races.
+fn add_reverse_connection_atomic(
+    neighbors: &[AtomicI32],
+    offsets: &[u64],
+    cum_nn: &[i32],
+    target: usize,
+    source: i32,
+    level: usize,
+    data: &Array2<f32>,
+    dist_fn: fn(&[f32], &[f32]) -> f32,
+) {
+    let range = get_neighbor_range(offsets, cum_nn, target, level);
+    if range.end > neighbors.len() {
+        return;
+    }
+
+    // Try to claim an empty slot via CAS
+    for idx in range.clone() {
+        if neighbors[idx]
+            .compare_exchange(-1, source, AtomicOrdering::Relaxed, AtomicOrdering::Relaxed)
+            .is_ok()
+        {
+            return;
+        }
+    }
+
+    // All slots occupied — try to replace the worst neighbor
+    let target_vec = data.row(target);
+    let target_slice = target_vec.as_slice().unwrap();
+    let source_dist = dist_fn(target_slice, data.row(source as usize).as_slice().unwrap());
+
+    let mut worst_idx = range.start;
+    let mut worst_dist = f32::NEG_INFINITY;
+    let mut worst_val = -1i32;
+
+    for idx in range {
+        let nb = neighbors[idx].load(AtomicOrdering::Relaxed);
+        if nb < 0 {
+            // Slot freed by another thread — try to claim it
+            if neighbors[idx]
+                .compare_exchange(-1, source, AtomicOrdering::Relaxed, AtomicOrdering::Relaxed)
+                .is_ok()
+            {
+                return;
+            }
+            continue;
+        }
+        let d = dist_fn(target_slice, data.row(nb as usize).as_slice().unwrap());
+        if d > worst_dist {
+            worst_dist = d;
+            worst_idx = idx;
+            worst_val = nb;
+        }
+    }
+
+    if source_dist < worst_dist && worst_val >= 0 {
+        // Single CAS attempt — if another thread changed the slot, give up
+        let _ = neighbors[worst_idx].compare_exchange(
+            worst_val,
+            source,
+            AtomicOrdering::Relaxed,
+            AtomicOrdering::Relaxed,
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -404,5 +782,64 @@ mod tests {
         assert_eq!(graph.ntotal, 5);
         assert_eq!(graph.dimensions, 4);
         assert!(graph.entry_point >= 0);
+    }
+
+    #[test]
+    fn test_build_parallel_small_graph() {
+        let data = Array2::from_shape_vec(
+            (5, 4),
+            vec![
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+                0.5, 0.5, 0.0, 0.0,
+            ],
+        )
+        .unwrap();
+
+        let config = HnswConfig {
+            m: 4,
+            ef_construction: 16,
+            ef_search: 16,
+            distance_metric: DistanceMetric::L2,
+            is_compact: false,
+            is_recompute: false,
+        };
+
+        let graph = build_hnsw_with_threads(&data, &config, 2).unwrap();
+        assert_eq!(graph.ntotal, 5);
+        assert_eq!(graph.dimensions, 4);
+        assert!(graph.entry_point >= 0);
+
+        // Verify neighbors are populated (at least some non-negative entries)
+        if let GraphStorage::Standard { neighbors, .. } = &graph.storage {
+            let connected = neighbors.iter().filter(|&&n| n >= 0).count();
+            assert!(connected > 0, "Graph should have some connections");
+        } else {
+            panic!("Expected Standard storage");
+        }
+    }
+
+    #[test]
+    fn test_parallel_larger_graph() {
+        // 100 random vectors in 16 dimensions
+        let mut rng = rand::thread_rng();
+        let n = 100;
+        let d = 16;
+        let data_vec: Vec<f32> = (0..n * d).map(|_| rng.gen::<f32>()).collect();
+        let data = Array2::from_shape_vec((n, d), data_vec).unwrap();
+
+        let config = HnswConfig {
+            m: 8,
+            ef_construction: 32,
+            ef_search: 32,
+            distance_metric: DistanceMetric::L2,
+            is_compact: false,
+            is_recompute: false,
+        };
+
+        let graph = build_hnsw_with_threads(&data, &config, 4).unwrap();
+        assert_eq!(graph.ntotal, n);
+        assert_eq!(graph.dimensions, d);
+        assert!(graph.entry_point >= 0);
+        assert!((graph.entry_point as usize) < n);
     }
 }

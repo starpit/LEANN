@@ -5,7 +5,7 @@ use std::path::Path;
 use tracing::info;
 
 use crate::embedding::EmbeddingProvider;
-use crate::hnsw::build::build_hnsw;
+use crate::hnsw::build::build_hnsw_with_threads;
 use crate::hnsw::csr::convert_to_csr;
 use crate::hnsw::graph::{HnswConfig, VectorStorage};
 use crate::hnsw::io::{write_hnsw_compact, write_hnsw_standard};
@@ -19,6 +19,7 @@ pub struct LeannBuilder {
     dimensions: Option<usize>,
     embedding_mode: String,
     config: HnswConfig,
+    num_threads: usize,
     chunks: Vec<Passage>,
     embedding_options: HashMap<String, serde_json::Value>,
 }
@@ -30,6 +31,9 @@ impl LeannBuilder {
             dimensions,
             embedding_mode: embedding_mode.to_string(),
             config: HnswConfig::default(),
+            num_threads: std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1),
             chunks: Vec::new(),
             embedding_options: HashMap::new(),
         }
@@ -68,6 +72,12 @@ impl LeannBuilder {
     /// Set recompute mode.
     pub fn with_recompute(mut self, recompute: bool) -> Self {
         self.config.is_recompute = recompute;
+        self
+    }
+
+    /// Set the number of threads for HNSW construction.
+    pub fn with_num_threads(mut self, n: usize) -> Self {
+        self.num_threads = n.max(1);
         self
     }
 
@@ -162,7 +172,7 @@ impl LeannBuilder {
             "Building HNSW graph (M={}, efConstruction={})",
             self.config.m, self.config.ef_construction
         );
-        let mut graph = build_hnsw(&embeddings, &self.config)?;
+        let mut graph = build_hnsw_with_threads(&embeddings, &self.config, self.num_threads)?;
 
         // Store vectors if not using recompute
         if !self.config.is_recompute {
@@ -321,7 +331,7 @@ impl LeannBuilder {
             normalize_l2_inplace(&mut emb);
         }
 
-        let graph = build_hnsw(&emb, &self.config)?;
+        let graph = build_hnsw_with_threads(&emb, &self.config, self.num_threads)?;
 
         if self.config.is_compact {
             let csr = convert_to_csr(&graph)?;
