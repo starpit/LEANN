@@ -5,7 +5,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::Json,
-    routing::{get, post, delete},
+    routing::{delete, get, post},
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -88,13 +88,14 @@ async fn list_indexes(State(state): State<AppState>) -> Json<IndexListResponse> 
     if let Ok(entries) = std::fs::read_dir(&state.index_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             if name.ends_with(".meta.json") {
                 if let Ok(meta) = IndexMeta::load(&path) {
-                    let index_name = name
-                        .strip_suffix(".meta.json")
-                        .unwrap_or(&name)
-                        .to_string();
+                    let index_name = name.strip_suffix(".meta.json").unwrap_or(&name).to_string();
                     indexes.push(IndexInfo {
                         name: index_name,
                         embedding_model: meta.embedding_model,

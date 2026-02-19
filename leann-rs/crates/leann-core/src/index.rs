@@ -246,13 +246,7 @@ mod tests {
             paths.passages_path(),
             Path::new("/data/my_index.leann.passages.jsonl")
         );
-        assert_eq!(
-            paths.index_file_path(),
-            Path::new("/data/my_index.index")
-        );
-        assert_eq!(
-            paths.id_map_path(),
-            Path::new("/data/my_index.ids.txt")
-        );
+        assert_eq!(paths.index_file_path(), Path::new("/data/my_index.index"));
+        assert_eq!(paths.id_map_path(), Path::new("/data/my_index.ids.txt"));
     }
 }

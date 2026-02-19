@@ -6,7 +6,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
-#[command(name = "leann", version, about = "LEANN - Lightweight vector database and RAG system")]
+#[command(
+    name = "leann",
+    version,
+    about = "LEANN - Lightweight vector database and RAG system"
+)]
 struct Cli {
     /// Show detailed output including backend logs
     #[arg(short = 'v', long, global = true)]
@@ -380,8 +384,8 @@ fn main() -> Result<()> {
                 graph_degree,
                 complexity,
                 _num_threads: num_threads,
-                compact: !no_compact,  // default true unless --no-compact
-                recompute: !no_recompute,  // default true unless --no-recompute
+                compact: !no_compact,     // default true unless --no-compact
+                recompute: !no_recompute, // default true unless --no-recompute
                 file_types,
                 include_hidden,
                 doc_chunk_size,
@@ -391,7 +395,7 @@ fn main() -> Result<()> {
                 use_ast_chunking,
                 ast_chunk_size,
                 _ast_chunk_overlap: ast_chunk_overlap,
-                _ast_fallback_traditional: true,  // default true per Python CLI (flag only confirms)
+                _ast_fallback_traditional: true, // default true per Python CLI (flag only confirms)
             })?;
         }
         Commands::Search {
@@ -409,7 +413,15 @@ fn main() -> Result<()> {
             embedding_prompt_template,
         } => {
             let _recompute = !no_recompute;
-            cmd_search(&index_name, &query, top_k, complexity, beam_width, prune_ratio, show_metadata)?;
+            cmd_search(
+                &index_name,
+                &query,
+                top_k,
+                complexity,
+                beam_width,
+                prune_ratio,
+                show_metadata,
+            )?;
         }
         Commands::Ask {
             index_name,
@@ -431,9 +443,26 @@ fn main() -> Result<()> {
         } => {
             let _recompute = !no_recompute;
             if interactive {
-                cmd_interactive_ask(&index_name, top_k, &llm, &model, host.as_deref(), api_base.as_deref(), api_key.as_deref())?;
+                cmd_interactive_ask(
+                    &index_name,
+                    top_k,
+                    &llm,
+                    &model,
+                    host.as_deref(),
+                    api_base.as_deref(),
+                    api_key.as_deref(),
+                )?;
             } else if let Some(q) = query {
-                cmd_ask(&index_name, &q, top_k, &llm, &model, host.as_deref(), api_base.as_deref(), api_key.as_deref())?;
+                cmd_ask(
+                    &index_name,
+                    &q,
+                    top_k,
+                    &llm,
+                    &model,
+                    host.as_deref(),
+                    api_base.as_deref(),
+                    api_key.as_deref(),
+                )?;
             } else {
                 println!("Provide a question or use --interactive");
             }
@@ -449,7 +478,17 @@ fn main() -> Result<()> {
             api_base,
             api_key,
         } => {
-            cmd_react(&index_name, &query, top_k, max_iterations, &llm, &model, host.as_deref(), api_base.as_deref(), api_key.as_deref())?;
+            cmd_react(
+                &index_name,
+                &query,
+                top_k,
+                max_iterations,
+                &llm,
+                &model,
+                host.as_deref(),
+                api_base.as_deref(),
+                api_key.as_deref(),
+            )?;
         }
         Commands::List => {
             cmd_list()?;
@@ -508,25 +547,44 @@ fn cmd_build(args: BuildArgs) -> Result<()> {
     let index_path = get_index_path(&args.index_name);
 
     if index_exists(&args.index_name) && !args.force {
-        println!("Index '{}' already exists. Use --force to rebuild.", args.index_name);
+        println!(
+            "Index '{}' already exists. Use --force to rebuild.",
+            args.index_name
+        );
         return Ok(());
     }
 
     // Classify docs paths
-    let files: Vec<&String> = args.docs.iter().filter(|p| Path::new(p).is_file()).collect();
+    let files: Vec<&String> = args
+        .docs
+        .iter()
+        .filter(|p| Path::new(p).is_file())
+        .collect();
     let directories: Vec<&String> = args.docs.iter().filter(|p| Path::new(p).is_dir()).collect();
 
     println!("Indexing {} path(s):", args.docs.len());
     if !files.is_empty() {
         println!("  Files ({}):", files.len());
         for (i, f) in files.iter().enumerate() {
-            println!("    {}. {}", i + 1, std::fs::canonicalize(f).unwrap_or_else(|_| PathBuf::from(f)).display());
+            println!(
+                "    {}. {}",
+                i + 1,
+                std::fs::canonicalize(f)
+                    .unwrap_or_else(|_| PathBuf::from(f))
+                    .display()
+            );
         }
     }
     if !directories.is_empty() {
         println!("  Directories ({}):", directories.len());
         for (i, d) in directories.iter().enumerate() {
-            println!("    {}. {}", i + 1, std::fs::canonicalize(d).unwrap_or_else(|_| PathBuf::from(d)).display());
+            println!(
+                "    {}. {}",
+                i + 1,
+                std::fs::canonicalize(d)
+                    .unwrap_or_else(|_| PathBuf::from(d))
+                    .display()
+            );
         }
     }
 
@@ -595,7 +653,10 @@ fn cmd_build(args: BuildArgs) -> Result<()> {
     }
 
     println!("Created {} chunks", total_chunks);
-    println!("Building index '{}' with {} backend...", args.index_name, "hnsw");
+    println!(
+        "Building index '{}' with {} backend...",
+        args.index_name, "hnsw"
+    );
 
     // Create embedding provider
     let provider = create_embedding_provider(
@@ -615,9 +676,9 @@ fn cmd_build(args: BuildArgs) -> Result<()> {
 
 fn is_code_file(path: &str) -> bool {
     let code_extensions = [
-        "rs", "py", "js", "jsx", "ts", "tsx", "java", "go", "c", "cpp", "cc", "cxx",
-        "h", "hpp", "rb", "sh", "bash", "cs", "swift", "kt", "scala", "r", "lua",
-        "php", "pl", "ex", "exs", "zig", "nim", "v", "d",
+        "rs", "py", "js", "jsx", "ts", "tsx", "java", "go", "c", "cpp", "cc", "cxx", "h", "hpp",
+        "rb", "sh", "bash", "cs", "swift", "kt", "scala", "r", "lua", "php", "pl", "ex", "exs",
+        "zig", "nim", "v", "d",
     ];
     Path::new(path)
         .extension()
@@ -826,7 +887,11 @@ fn cmd_list() -> Result<()> {
                 if path.is_dir() {
                     let meta_file = path.join("documents.leann.meta.json");
                     let name = path.file_name().unwrap_or_default().to_string_lossy();
-                    let status = if meta_file.exists() { "OK" } else { "incomplete" };
+                    let status = if meta_file.exists() {
+                        "OK"
+                    } else {
+                        "incomplete"
+                    };
 
                     let mut size_mb = 0.0f64;
                     if let Ok(files) = std::fs::read_dir(&path) {
@@ -855,7 +920,8 @@ fn cmd_list() -> Result<()> {
             continue;
         }
         if let Ok(meta) = IndexMeta::load(&meta_file) {
-            let display_name = meta_file.parent()
+            let display_name = meta_file
+                .parent()
                 .and_then(|p| p.file_name())
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| "unknown".to_string());
@@ -954,14 +1020,22 @@ fn cmd_watch(index_name: &str) -> Result<()> {
 
     let sync_config_path = index_dir.join("sync_roots.json");
     if !sync_config_path.exists() {
-        println!("Sync config not found for index '{}'. Rebuild the index to enable watch.", index_name);
+        println!(
+            "Sync config not found for index '{}'. Rebuild the index to enable watch.",
+            index_name
+        );
         return Ok(());
     }
 
-    let config: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&sync_config_path)?)?;
+    let config: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&sync_config_path)?)?;
     let roots = config["roots"]
         .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
 
     if roots.is_empty() {
@@ -977,11 +1051,19 @@ fn cmd_watch(index_name: &str) -> Result<()> {
 
     let include_extensions = config["include_extensions"]
         .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     let ignore_patterns = config["ignore_patterns"]
         .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
 
     for root in &roots {
@@ -990,17 +1072,19 @@ fn cmd_watch(index_name: &str) -> Result<()> {
             eprintln!("Warning: sync root not found: {}", root);
             continue;
         }
-        match FileSynchronizer::new(root_path, ignore_patterns.clone(), include_extensions.clone()) {
-            Ok(mut sync) => {
-                match sync.check_for_changes() {
-                    Ok((added, removed, modified)) => {
-                        all_added.extend(added);
-                        all_removed.extend(removed);
-                        all_modified.extend(modified);
-                    }
-                    Err(e) => eprintln!("Warning: failed to check {}: {}", root, e),
+        match FileSynchronizer::new(
+            root_path,
+            ignore_patterns.clone(),
+            include_extensions.clone(),
+        ) {
+            Ok(mut sync) => match sync.check_for_changes() {
+                Ok((added, removed, modified)) => {
+                    all_added.extend(added);
+                    all_removed.extend(removed);
+                    all_modified.extend(modified);
                 }
-            }
+                Err(e) => eprintln!("Warning: failed to check {}: {}", root, e),
+            },
             Err(e) => eprintln!("Warning: failed to initialize sync for {}: {}", root, e),
         }
     }
@@ -1060,10 +1144,15 @@ async fn run_server(host: String, port: u16) -> Result<()> {
     use serde::{Deserialize, Serialize};
 
     #[derive(Serialize)]
-    struct HealthResponse { status: String, version: String }
+    struct HealthResponse {
+        status: String,
+        version: String,
+    }
 
     #[derive(Serialize)]
-    struct IndexListResponse { indexes: Vec<String> }
+    struct IndexListResponse {
+        indexes: Vec<String>,
+    }
 
     #[derive(Deserialize)]
     struct SearchRequest {
@@ -1071,16 +1160,22 @@ async fn run_server(host: String, port: u16) -> Result<()> {
         #[serde(default = "default_top_k")]
         top_k: usize,
     }
-    fn default_top_k() -> usize { 5 }
+    fn default_top_k() -> usize {
+        5
+    }
 
     #[derive(Serialize)]
     struct SearchResultResponse {
-        id: String, score: f64, text: String,
+        id: String,
+        score: f64,
+        text: String,
         metadata: HashMap<String, serde_json::Value>,
     }
 
     #[derive(Serialize)]
-    struct SearchResponse { results: Vec<SearchResultResponse> }
+    struct SearchResponse {
+        results: Vec<SearchResultResponse>,
+    }
 
     async fn health() -> Json<HealthResponse> {
         Json(HealthResponse {
@@ -1112,17 +1207,22 @@ async fn run_server(host: String, port: u16) -> Result<()> {
         use leann_core::searcher::LeannSearcher;
 
         let index_path = get_index_path(&name);
-        let searcher = LeannSearcher::open(&index_path)
-            .map_err(|_| StatusCode::NOT_FOUND)?;
+        let searcher = LeannSearcher::open(&index_path).map_err(|_| StatusCode::NOT_FOUND)?;
 
         let results = searcher
             .search(&request.query, request.top_k)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         Ok(Json(SearchResponse {
-            results: results.into_iter().map(|r| SearchResultResponse {
-                id: r.id, score: r.score, text: r.text, metadata: r.metadata,
-            }).collect(),
+            results: results
+                .into_iter()
+                .map(|r| SearchResultResponse {
+                    id: r.id,
+                    score: r.score,
+                    text: r.text,
+                    metadata: r.metadata,
+                })
+                .collect(),
         }))
     }
 
@@ -1131,7 +1231,8 @@ async fn run_server(host: String, port: u16) -> Result<()> {
         .route("/indexes", get(list_indexes))
         .route("/indexes/{name}/search", post(search_index));
 
-    let listener = tokio::net::TcpListener::bind(format!("{}:{}", host, port)).await
+    let listener = tokio::net::TcpListener::bind(format!("{}:{}", host, port))
+        .await
         .map_err(|e| anyhow::anyhow!("binding {}:{}: {}", host, port, e))?;
     tracing::info!("LEANN HTTP server listening on {}:{}", host, port);
 
@@ -1149,16 +1250,19 @@ async fn run_server(host: String, port: u16) -> Result<()> {
 fn resolve_index_for_search(index_name: &str) -> Result<PathBuf> {
     // 1) CLI-format
     let cli_path = get_index_path(index_name);
-    let cli_meta = indexes_dir().join(index_name).join("documents.leann.meta.json");
+    let cli_meta = indexes_dir()
+        .join(index_name)
+        .join("documents.leann.meta.json");
     if cli_meta.exists() {
         return Ok(cli_path);
     }
 
     // 2) Direct path (for app-format or absolute paths)
     let direct = PathBuf::from(index_name);
-    let direct_meta = direct.parent()
-        .unwrap_or(Path::new("."))
-        .join(format!("{}.meta.json", direct.file_name().unwrap_or_default().to_string_lossy()));
+    let direct_meta = direct.parent().unwrap_or(Path::new(".")).join(format!(
+        "{}.meta.json",
+        direct.file_name().unwrap_or_default().to_string_lossy()
+    ));
     if direct_meta.exists() {
         return Ok(direct);
     }
@@ -1184,9 +1288,9 @@ fn load_documents(
     include_hidden: bool,
 ) -> Result<Vec<(String, String)>> {
     let default_extensions = [
-        "txt", "md", "rst", "rs", "py", "js", "jsx", "ts", "tsx", "java", "go", "c", "cpp",
-        "cc", "cxx", "h", "hpp", "rb", "sh", "bash", "toml", "yaml", "yml", "json", "xml",
-        "html", "htm", "css", "sql", "r", "lua", "php", "swift", "kt", "scala", "ex", "exs",
+        "txt", "md", "rst", "rs", "py", "js", "jsx", "ts", "tsx", "java", "go", "c", "cpp", "cc",
+        "cxx", "h", "hpp", "rb", "sh", "bash", "toml", "yaml", "yml", "json", "xml", "html", "htm",
+        "css", "sql", "r", "lua", "php", "swift", "kt", "scala", "ex", "exs",
     ];
 
     let mut documents = Vec::new();
@@ -1224,8 +1328,11 @@ fn walk_dir(dir: &Path, include_hidden: bool, callback: &mut dyn FnMut(&Path)) {
                 if !include_hidden && name.starts_with('.') {
                     continue;
                 }
-                if name == "node_modules" || name == "target" || name == "__pycache__"
-                    || name == "venv" || name == ".venv"
+                if name == "node_modules"
+                    || name == "target"
+                    || name == "__pycache__"
+                    || name == "venv"
+                    || name == ".venv"
                 {
                     continue;
                 }
@@ -1269,13 +1376,15 @@ fn create_embedding_provider(
         _ => {
             // sentence-transformers / mlx: try OpenAI, fall back to Ollama
             if let Ok(provider) = leann_core::embedding::openai::OpenAiEmbedding::new(
-                "text-embedding-3-small", None, None, None,
+                "text-embedding-3-small",
+                None,
+                None,
+                None,
             ) {
                 Ok(Box::new(provider))
             } else {
-                let provider = leann_core::embedding::ollama::OllamaEmbedding::new(
-                    "nomic-embed-text", None,
-                );
+                let provider =
+                    leann_core::embedding::ollama::OllamaEmbedding::new("nomic-embed-text", None);
                 Ok(Box::new(provider))
             }
         }

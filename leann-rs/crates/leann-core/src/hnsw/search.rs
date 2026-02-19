@@ -127,19 +127,12 @@ pub fn search_hnsw(
     let ef = params.ef_search.max(top_k);
 
     let dist_fn: Box<dyn Fn(&[f32], &[f32]) -> f32> = match graph.config.distance_metric {
-        crate::index::DistanceMetric::L2 => {
-            Box::new(|a: &[f32], b: &[f32]| -> f32 {
-                a.iter()
-                    .zip(b.iter())
-                    .map(|(x, y)| (x - y) * (x - y))
-                    .sum()
-            })
-        }
-        _ => {
-            Box::new(|a: &[f32], b: &[f32]| -> f32 {
-                -a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f32>()
-            })
-        }
+        crate::index::DistanceMetric::L2 => Box::new(|a: &[f32], b: &[f32]| -> f32 {
+            a.iter().zip(b.iter()).map(|(x, y)| (x - y) * (x - y)).sum()
+        }),
+        _ => Box::new(|a: &[f32], b: &[f32]| -> f32 {
+            -a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f32>()
+        }),
     };
 
     // Phase 1: Greedy search from top level to level 1
@@ -397,12 +390,7 @@ mod tests {
     fn test_search_with_stored_vectors() {
         let data = Array2::from_shape_vec(
             (4, 3),
-            vec![
-                1.0, 0.0, 0.0,
-                0.0, 1.0, 0.0,
-                0.0, 0.0, 1.0,
-                0.5, 0.5, 0.0,
-            ],
+            vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.5, 0.5, 0.0],
         )
         .unwrap();
 
@@ -436,12 +424,7 @@ mod tests {
     fn test_search_with_recompute() {
         let data = Array2::from_shape_vec(
             (4, 3),
-            vec![
-                1.0, 0.0, 0.0,
-                0.0, 1.0, 0.0,
-                0.0, 0.0, 1.0,
-                0.5, 0.5, 0.0,
-            ],
+            vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.5, 0.5, 0.0],
         )
         .unwrap();
 
@@ -465,12 +448,8 @@ mod tests {
             ..Default::default()
         };
 
-        let (labels, distances) = search_hnsw_recompute(
-            &graph,
-            &query,
-            2,
-            &params,
-            |node_ids, q| {
+        let (labels, distances) =
+            search_hnsw_recompute(&graph, &query, 2, &params, |node_ids, q| {
                 node_ids
                     .iter()
                     .map(|&id| {
@@ -481,8 +460,7 @@ mod tests {
                             .sum()
                     })
                     .collect()
-            },
-        );
+            });
 
         assert_eq!(labels.len(), 2);
         assert_eq!(labels[0], 0);

@@ -42,10 +42,7 @@ impl LeannSearcher {
         let meta_path = paths.meta_path();
 
         if !meta_path.exists() {
-            anyhow::bail!(
-                "LEANN metadata file not found at {}",
-                meta_path.display()
-            );
+            anyhow::bail!("LEANN metadata file not found at {}", meta_path.display());
         }
 
         let meta = IndexMeta::load(&meta_path)?;
@@ -53,8 +50,7 @@ impl LeannSearcher {
         let recompute = meta.requires_recompute();
 
         // Load passages
-        let passages =
-            PassageManager::load(&meta.passage_sources, Some(&meta_path))?;
+        let passages = PassageManager::load(&meta.passage_sources, Some(&meta_path))?;
 
         // Load HNSW graph
         let index_file = paths.index_file_path();
@@ -143,32 +139,20 @@ impl LeannSearcher {
         // Search
         let (labels, distances) = if self.recompute_embeddings {
             let client = EmbeddingClient::new(zmq_port);
-            search_hnsw_recompute(
-                &self.graph,
-                &query_vec,
-                top_k,
-                &params,
-                |node_ids, q| {
-                    client
-                        .compute_distances(node_ids, q)
-                        .unwrap_or_else(|_| vec![1e9; node_ids.len()])
-                },
-            )
+            search_hnsw_recompute(&self.graph, &query_vec, top_k, &params, |node_ids, q| {
+                client
+                    .compute_distances(node_ids, q)
+                    .unwrap_or_else(|_| vec![1e9; node_ids.len()])
+            })
         } else {
             // Non-recompute: we'd need stored vectors
             // For now, fall back to recompute
             let client = EmbeddingClient::new(zmq_port);
-            search_hnsw_recompute(
-                &self.graph,
-                &query_vec,
-                top_k,
-                &params,
-                |node_ids, q| {
-                    client
-                        .compute_distances(node_ids, q)
-                        .unwrap_or_else(|_| vec![1e9; node_ids.len()])
-                },
-            )
+            search_hnsw_recompute(&self.graph, &query_vec, top_k, &params, |node_ids, q| {
+                client
+                    .compute_distances(node_ids, q)
+                    .unwrap_or_else(|_| vec![1e9; node_ids.len()])
+            })
         };
 
         // Map labels to string IDs and enrich with passages
@@ -291,7 +275,11 @@ impl LeannSearcher {
             }
         }
 
-        matches.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        matches.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         matches.truncate(top_k);
         Ok(matches)
     }

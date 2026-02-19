@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use ndarray::Array2;
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 use super::EmbeddingProvider;
 use crate::settings::resolve_openai_api_key;
@@ -63,36 +64,59 @@ impl EmbeddingProvider for OpenAiEmbedding {
             return Ok(Array2::zeros((0, self.dimensions)));
         }
 
-        let request = EmbeddingRequest {
-            model: self.model.clone(),
-            input: chunks.to_vec(),
+        // Batch to avoid overwhelming the API (matches Python's max_batch_size=800)
+        let max_batch_size = if self.base_url.contains("generativelanguage.googleapis.com") {
+            100 // Gemini OpenAI-compatible endpoint limits to 100
+        } else {
+            800
         };
 
-        let response = self
-            .client
-            .post(format!("{}/embeddings", self.base_url))
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
-            .json(&request)
-            .send()
-            .context("sending embedding request to OpenAI")?;
+        let mut all_embeddings: Vec<Vec<f32>> = Vec::with_capacity(chunks.len());
+        let num_batches = (chunks.len() + max_batch_size - 1) / max_batch_size;
 
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().unwrap_or_default();
-            anyhow::bail!("OpenAI API error ({}): {}", status, body);
+        for (i, batch) in chunks.chunks(max_batch_size).enumerate() {
+            info!(
+                "OpenAI embedding batch {}/{} ({} chunks)",
+                i + 1,
+                num_batches,
+                batch.len()
+            );
+            let request = EmbeddingRequest {
+                model: self.model.clone(),
+                input: batch.to_vec(),
+            };
+
+            let response = self
+                .client
+                .post(format!("{}/embeddings", self.base_url))
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header("Content-Type", "application/json")
+                .json(&request)
+                .send()
+                .context("sending embedding request to OpenAI")?;
+
+            let status = response.status();
+            if !status.is_success() {
+                let body = response.text().unwrap_or_default();
+                anyhow::bail!("OpenAI API error ({}): {}", status, body);
+            }
+
+            let resp: EmbeddingResponse = response
+                .json()
+                .context("parsing OpenAI embedding response")?;
+
+            for item in resp.data {
+                all_embeddings.push(item.embedding);
+            }
         }
 
-        let resp: EmbeddingResponse = response
-            .json()
-            .context("parsing OpenAI embedding response")?;
-
-        let n = resp.data.len();
-        if n == 0 {
+        if all_embeddings.is_empty() {
             return Ok(Array2::zeros((0, self.dimensions)));
         }
-        let d = resp.data[0].embedding.len();
-        let flat: Vec<f32> = resp.data.into_iter().flat_map(|e| e.embedding).collect();
+
+        let n = all_embeddings.len();
+        let d = all_embeddings[0].len();
+        let flat: Vec<f32> = all_embeddings.into_iter().flatten().collect();
 
         Array2::from_shape_vec((n, d), flat).context("reshaping OpenAI embeddings")
     }

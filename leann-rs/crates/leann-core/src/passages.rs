@@ -102,8 +102,9 @@ impl PassageManager {
                 let mut reader = BufReader::new(file);
                 let mut line = String::new();
                 reader.read_line(&mut line)?;
-                let passage: Passage = serde_json::from_str(&line)
-                    .with_context(|| format!("parsing passage {} at offset {}", passage_id, offset))?;
+                let passage: Passage = serde_json::from_str(&line).with_context(|| {
+                    format!("parsing passage {} at offset {}", passage_id, offset)
+                })?;
                 return Ok(passage);
             }
         }
@@ -126,10 +127,7 @@ impl PassageManager {
             .map(|r| {
                 let mut map = HashMap::new();
                 map.insert("id".to_string(), serde_json::Value::String(r.id.clone()));
-                map.insert(
-                    "score".to_string(),
-                    serde_json::json!(r.score),
-                );
+                map.insert("score".to_string(), serde_json::json!(r.score));
                 map.insert(
                     "text".to_string(),
                     serde_json::Value::String(r.text.clone()),
@@ -365,8 +363,7 @@ fn parse_python_pickle_offset_map(data: &[u8]) -> Result<HashMap<String, u64>> {
                 if pos + 8 > data.len() {
                     break;
                 }
-                let len =
-                    u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
+                let len = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
                 pos += 8;
                 if pos + len > data.len() {
                     break;
@@ -380,8 +377,7 @@ fn parse_python_pickle_offset_map(data: &[u8]) -> Result<HashMap<String, u64>> {
                 if pos + 4 > data.len() {
                     break;
                 }
-                let len =
-                    u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
+                let len = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
                 pos += 4;
                 if pos + len > data.len() {
                     break;
@@ -395,8 +391,7 @@ fn parse_python_pickle_offset_map(data: &[u8]) -> Result<HashMap<String, u64>> {
                 if pos + 4 > data.len() {
                     break;
                 }
-                let v =
-                    i32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as i64;
+                let v = i32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as i64;
                 pos += 4;
                 stack.push(PickleValue::Int(v));
             }
@@ -414,8 +409,7 @@ fn parse_python_pickle_offset_map(data: &[u8]) -> Result<HashMap<String, u64>> {
                 if pos + 2 > data.len() {
                     break;
                 }
-                let v =
-                    u16::from_le_bytes(data[pos..pos + 2].try_into().unwrap()) as i64;
+                let v = u16::from_le_bytes(data[pos..pos + 2].try_into().unwrap()) as i64;
                 pos += 2;
                 stack.push(PickleValue::Int(v));
             }
@@ -438,8 +432,7 @@ fn parse_python_pickle_offset_map(data: &[u8]) -> Result<HashMap<String, u64>> {
                 if pos + 4 > data.len() {
                     break;
                 }
-                let nbytes =
-                    u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
+                let nbytes = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
                 pos += 4;
                 if pos + nbytes > data.len() {
                     break;

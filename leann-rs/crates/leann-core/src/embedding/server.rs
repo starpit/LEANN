@@ -57,11 +57,8 @@ impl EmbeddingServer {
             }
 
             // Use a timeout-based approach for checking shutdown
-            let recv_result = tokio::time::timeout(
-                std::time::Duration::from_secs(1),
-                socket.recv(),
-            )
-            .await;
+            let recv_result =
+                tokio::time::timeout(std::time::Duration::from_secs(1), socket.recv()).await;
 
             let msg = match recv_result {
                 Ok(Ok(msg)) => msg,
@@ -112,11 +109,7 @@ impl EmbeddingServer {
 
         // Fall back to embedding by ID
         if let Ok(ids) = rmp_serde::from_slice::<Vec<Vec<i64>>>(request_bytes) {
-            let flat_ids: Vec<usize> = ids
-                .into_iter()
-                .flatten()
-                .map(|id| id as usize)
-                .collect();
+            let flat_ids: Vec<usize> = ids.into_iter().flatten().map(|id| id as usize).collect();
             return self.handle_embedding_by_id(&flat_ids);
         }
 
@@ -166,18 +159,16 @@ impl EmbeddingServer {
                 for (i, &original_idx) in found_indices.iter().enumerate() {
                     let emb = embeddings.row(i);
                     let dist = match self.distance_metric {
-                        DistanceMetric::L2 => {
-                            emb.iter()
-                                .zip(query_vector.iter())
-                                .map(|(a, b)| (a - b) * (a - b))
-                                .sum()
-                        }
-                        _ => {
-                            -emb.iter()
-                                .zip(query_vector.iter())
-                                .map(|(a, b)| a * b)
-                                .sum::<f32>()
-                        }
+                        DistanceMetric::L2 => emb
+                            .iter()
+                            .zip(query_vector.iter())
+                            .map(|(a, b)| (a - b) * (a - b))
+                            .sum(),
+                        _ => -emb
+                            .iter()
+                            .zip(query_vector.iter())
+                            .map(|(a, b)| a * b)
+                            .sum::<f32>(),
                     };
                     distances[original_idx] = dist;
                 }
@@ -220,10 +211,7 @@ impl EmbeddingServer {
             }
         }
 
-        let response: Vec<Vec<f32>> = vec![
-            vec![n as f32, d as f32],
-            flat_data,
-        ];
+        let response: Vec<Vec<f32>> = vec![vec![n as f32, d as f32], flat_data];
         Ok(rmp_serde::to_vec(&response)?)
     }
 

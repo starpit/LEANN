@@ -199,11 +199,7 @@ impl FileSynchronizer {
 
             // Check ignore patterns
             let path_str = path.to_string_lossy();
-            if self
-                .ignore_patterns
-                .iter()
-                .any(|p| path_str.contains(p))
-            {
+            if self.ignore_patterns.iter().any(|p| path_str.contains(p)) {
                 continue;
             }
 

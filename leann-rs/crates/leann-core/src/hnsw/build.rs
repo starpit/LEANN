@@ -1,8 +1,8 @@
 use anyhow::Result;
 use ndarray::Array2;
 use rand::Rng;
-use std::collections::BinaryHeap;
 use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 
 use super::graph::*;
 use crate::index::DistanceMetric;
@@ -38,10 +38,7 @@ impl Ord for Candidate {
 }
 
 /// Build an HNSW graph from dense vectors.
-pub fn build_hnsw(
-    data: &Array2<f32>,
-    config: &HnswConfig,
-) -> Result<HnswGraph> {
+pub fn build_hnsw(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGraph> {
     let n = data.nrows();
     let d = data.ncols();
 
@@ -108,10 +105,7 @@ pub fn build_hnsw(
     // Helper: compute distance between two vectors
     let dist_fn = match config.distance_metric {
         DistanceMetric::L2 => |a: &[f32], b: &[f32]| -> f32 {
-            a.iter()
-                .zip(b.iter())
-                .map(|(x, y)| (x - y) * (x - y))
-                .sum()
+            a.iter().zip(b.iter()).map(|(x, y)| (x - y) * (x - y)).sum()
         },
         DistanceMetric::Mips | DistanceMetric::Cosine => |a: &[f32], b: &[f32]| -> f32 {
             // For MIPS, we negate the inner product to use as "distance" (lower = more similar)
@@ -220,16 +214,15 @@ pub fn build_hnsw(
             }
 
             // Sort results by distance and take top max_neighbors
-            result.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap_or(Ordering::Equal));
+            result.sort_by(|a, b| {
+                a.distance
+                    .partial_cmp(&b.distance)
+                    .unwrap_or(Ordering::Equal)
+            });
             result.truncate(max_neighbors);
 
             // Connect node i to its neighbors at this level
-            let neighbors_range = get_neighbor_range(
-                &offsets,
-                &cum_nneighbor_per_level,
-                i,
-                level,
-            );
+            let neighbors_range = get_neighbor_range(&offsets, &cum_nneighbor_per_level, i, level);
             for (slot, cand) in neighbors_range.zip(result.iter()) {
                 neighbors[slot] = cand.id as i32;
             }
@@ -384,10 +377,7 @@ mod tests {
         let data = Array2::from_shape_vec(
             (5, 4),
             vec![
-                1.0, 0.0, 0.0, 0.0,
-                0.0, 1.0, 0.0, 0.0,
-                0.0, 0.0, 1.0, 0.0,
-                0.0, 0.0, 0.0, 1.0,
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
                 0.5, 0.5, 0.0, 0.0,
             ],
         )

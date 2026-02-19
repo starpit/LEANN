@@ -49,7 +49,10 @@ fn read_vec<T: Copy + Default, R: Read>(reader: &mut R) -> Result<Vec<T>> {
 fn write_vec<T: Copy, W: Write>(writer: &mut W, data: &[T]) -> Result<()> {
     write_le(writer, data.len() as u64)?;
     let bytes = unsafe {
-        std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * std::mem::size_of::<T>())
+        std::slice::from_raw_parts(
+            data.as_ptr() as *const u8,
+            data.len() * std::mem::size_of::<T>(),
+        )
     };
     writer.write_all(bytes)?;
     Ok(())

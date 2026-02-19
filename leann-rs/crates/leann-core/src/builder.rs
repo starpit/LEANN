@@ -23,11 +23,7 @@ pub struct LeannBuilder {
 }
 
 impl LeannBuilder {
-    pub fn new(
-        embedding_model: &str,
-        dimensions: Option<usize>,
-        embedding_mode: &str,
-    ) -> Self {
+    pub fn new(embedding_model: &str, dimensions: Option<usize>, embedding_mode: &str) -> Self {
         Self {
             embedding_model: embedding_model.to_string(),
             dimensions,
@@ -141,7 +137,10 @@ impl LeannBuilder {
         write_id_map(&ids, &paths.id_map_path())?;
 
         // Build HNSW graph
-        info!("Building HNSW graph (M={}, efConstruction={})", self.config.m, self.config.ef_construction);
+        info!(
+            "Building HNSW graph (M={}, efConstruction={})",
+            self.config.m, self.config.ef_construction
+        );
         let mut graph = build_hnsw(&embeddings, &self.config)?;
 
         // Store vectors if not using recompute
@@ -191,10 +190,7 @@ impl LeannBuilder {
             dimensions,
             backend_kwargs: {
                 let mut kwargs = HashMap::new();
-                kwargs.insert(
-                    "M".to_string(),
-                    serde_json::json!(self.config.m),
-                );
+                kwargs.insert("M".to_string(), serde_json::json!(self.config.m));
                 kwargs.insert(
                     "efConstruction".to_string(),
                     serde_json::json!(self.config.ef_construction),
@@ -220,10 +216,34 @@ impl LeannBuilder {
             embedding_mode: self.embedding_mode.clone(),
             passage_sources: vec![PassageSource {
                 source_type: "jsonl".to_string(),
-                path: paths.passages_path().file_name().unwrap().to_string_lossy().to_string(),
-                index_path: paths.offset_path().file_name().unwrap().to_string_lossy().to_string(),
-                path_relative: Some(paths.passages_path().file_name().unwrap().to_string_lossy().to_string()),
-                index_path_relative: Some(paths.offset_path().file_name().unwrap().to_string_lossy().to_string()),
+                path: paths
+                    .passages_path()
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string(),
+                index_path: paths
+                    .offset_path()
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string(),
+                path_relative: Some(
+                    paths
+                        .passages_path()
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .to_string(),
+                ),
+                index_path_relative: Some(
+                    paths
+                        .offset_path()
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .to_string(),
+                ),
             }],
             embedding_options: self.embedding_options.clone(),
             is_compact: Some(self.config.is_compact),
@@ -260,15 +280,12 @@ impl LeannBuilder {
         // Ensure we have passages for all embeddings
         if self.chunks.is_empty() {
             for id in ids {
-                self.add_text(
-                    &format!("Document {}", id),
-                    {
-                        let mut m = HashMap::new();
-                        m.insert("id".to_string(), serde_json::json!(id));
-                        m.insert("from_embeddings".to_string(), serde_json::json!(true));
-                        m
-                    },
-                );
+                self.add_text(&format!("Document {}", id), {
+                    let mut m = HashMap::new();
+                    m.insert("id".to_string(), serde_json::json!(id));
+                    m.insert("from_embeddings".to_string(), serde_json::json!(true));
+                    m
+                });
             }
         }
 
@@ -303,8 +320,18 @@ impl LeannBuilder {
             embedding_mode: self.embedding_mode.clone(),
             passage_sources: vec![PassageSource {
                 source_type: "jsonl".to_string(),
-                path: paths.passages_path().file_name().unwrap().to_string_lossy().to_string(),
-                index_path: paths.offset_path().file_name().unwrap().to_string_lossy().to_string(),
+                path: paths
+                    .passages_path()
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string(),
+                index_path: paths
+                    .offset_path()
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string(),
                 path_relative: None,
                 index_path_relative: None,
             }],

@@ -84,9 +84,9 @@ impl EmbeddingServerManager {
         }
 
         info!("Starting embedding server on port {}", actual_port);
-        let child = cmd.spawn().map_err(|e| {
-            anyhow::anyhow!("Failed to start embedding server: {}", e)
-        })?;
+        let child = cmd
+            .spawn()
+            .map_err(|e| anyhow::anyhow!("Failed to start embedding server: {}", e))?;
 
         self.process = Some(child);
         self.port = Some(actual_port);

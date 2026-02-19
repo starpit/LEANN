@@ -131,10 +131,7 @@ mod tests {
         env::remove_var("LEANN_OLLAMA_HOST");
         env::remove_var("OLLAMA_HOST");
         env::remove_var("LOCAL_LLM_ENDPOINT");
-        assert_eq!(
-            resolve_ollama_host(None),
-            "http://localhost:11434"
-        );
+        assert_eq!(resolve_ollama_host(None), "http://localhost:11434");
     }
 
     #[test]

@@ -35,11 +35,7 @@ pub struct CodeChunk {
 /// This uses heuristic-based parsing to identify function/class boundaries
 /// rather than a full AST parser. For a full tree-sitter implementation,
 /// add the tree-sitter crate and language grammars.
-pub fn chunk_code(
-    source: &str,
-    filename: &str,
-    max_chunk_size: usize,
-) -> Vec<CodeChunk> {
+pub fn chunk_code(source: &str, filename: &str, max_chunk_size: usize) -> Vec<CodeChunk> {
     let language = detect_language(filename).unwrap_or("unknown");
 
     match language {
@@ -61,7 +57,8 @@ fn chunk_python(source: &str, filename: &str, max_chunk_size: usize) -> Vec<Code
         let trimmed = line.trim();
 
         // Detect function or class definition
-        if trimmed.starts_with("def ") || trimmed.starts_with("class ")
+        if trimmed.starts_with("def ")
+            || trimmed.starts_with("class ")
             || trimmed.starts_with("async def ")
         {
             let indent = line.len() - line.trim_start().len();
@@ -362,10 +359,7 @@ fn extract_name(definition_line: &str) -> String {
     for (i, &part) in parts.iter().enumerate() {
         if part == "def" || part == "class" {
             if let Some(name) = parts.get(i + 1) {
-                return name
-                    .trim_end_matches('(')
-                    .trim_end_matches(':')
-                    .to_string();
+                return name.trim_end_matches('(').trim_end_matches(':').to_string();
             }
         }
     }
@@ -450,7 +444,11 @@ class Foo:
         pass
 "#;
         let chunks = chunk_code(source, "test.py", 1000);
-        assert!(chunks.len() >= 2, "Expected at least 2 chunks, got {}", chunks.len());
+        assert!(
+            chunks.len() >= 2,
+            "Expected at least 2 chunks, got {}",
+            chunks.len()
+        );
     }
 
     #[test]
@@ -469,7 +467,11 @@ struct Foo {
 }
 "#;
         let chunks = chunk_code(source, "test.rs", 1000);
-        assert!(chunks.len() >= 2, "Expected at least 2 chunks, got {}", chunks.len());
+        assert!(
+            chunks.len() >= 2,
+            "Expected at least 2 chunks, got {}",
+            chunks.len()
+        );
     }
 
     #[test]

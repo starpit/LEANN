@@ -210,7 +210,10 @@ pub fn get_llm(config: &LlmConfig) -> Result<Box<dyn LlmProvider>> {
             config.base_url.as_deref(),
         )?)),
         "anthropic" => Ok(Box::new(AnthropicChat::new(
-            config.model.as_deref().unwrap_or("claude-3-5-sonnet-20241022"),
+            config
+                .model
+                .as_deref()
+                .unwrap_or("claude-3-5-sonnet-20241022"),
             config.api_key.as_deref(),
             config.base_url.as_deref(),
         )?)),
@@ -257,7 +260,10 @@ impl LeannChat {
             context, question
         );
 
-        info!("Sending RAG prompt to LLM ({} context results)", results.len());
+        info!(
+            "Sending RAG prompt to LLM ({} context results)",
+            results.len()
+        );
         let answer = self.llm.ask(&prompt, &LlmParams::default())?;
         Ok(answer)
     }

@@ -43,11 +43,7 @@ impl MetadataFilterEngine {
     }
 
     /// Evaluate all filters against a single result (AND logic).
-    fn evaluate_filters(
-        &self,
-        result: &HashMap<String, Value>,
-        filters: &MetadataFilters,
-    ) -> bool {
+    fn evaluate_filters(&self, result: &HashMap<String, Value>, filters: &MetadataFilters) -> bool {
         for (field_name, filter_spec) in filters {
             if !self.evaluate_field_filter(result, field_name, filter_spec) {
                 return false;
@@ -64,14 +60,12 @@ impl MetadataFilterEngine {
         filter_spec: &FilterSpec,
     ) -> bool {
         // First check top-level fields, then check metadata
-        let field_value = result
-            .get(field_name)
-            .or_else(|| {
-                result
-                    .get("metadata")
-                    .and_then(|m| m.as_object())
-                    .and_then(|m| m.get(field_name))
-            });
+        let field_value = result.get(field_name).or_else(|| {
+            result
+                .get("metadata")
+                .and_then(|m| m.as_object())
+                .and_then(|m| m.get(field_name))
+        });
 
         let field_value = match field_value {
             Some(v) if !v.is_null() => v,

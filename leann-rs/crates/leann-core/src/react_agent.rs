@@ -164,7 +164,12 @@ fn format_search_results(results: &[SearchResult]) -> String {
             } else {
                 r.text.clone()
             };
-            let mut entry = format!("[Result {}] (Score: {:.3})\n{}", i + 1, r.score, text_preview);
+            let mut entry = format!(
+                "[Result {}] (Score: {:.3})\n{}",
+                i + 1,
+                r.score,
+                text_preview
+            );
             if let Some(source) = r.metadata.get("source").and_then(|v| v.as_str()) {
                 entry.push_str(&format!("\nSource: {}", source));
             }
@@ -224,7 +229,8 @@ mod tests {
 
     #[test]
     fn test_parse_llm_response_with_action() {
-        let response = "Thought: I need to find information about HNSW.\nAction: search(\"HNSW algorithm\")";
+        let response =
+            "Thought: I need to find information about HNSW.\nAction: search(\"HNSW algorithm\")";
         let (thought, action) = parse_llm_response(response);
         assert_eq!(thought, "I need to find information about HNSW.");
         assert_eq!(action, Some("HNSW algorithm".to_string()));

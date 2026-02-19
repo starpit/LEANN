@@ -1,5 +1,6 @@
 use anyhow::Result;
 use ndarray::Array2;
+use tracing::info;
 
 use super::EmbeddingProvider;
 use crate::settings;
@@ -14,8 +15,9 @@ pub struct GeminiEmbedding {
 
 impl GeminiEmbedding {
     pub fn new(model: &str, api_key: Option<&str>) -> Result<Self> {
-        let api_key = settings::resolve_gemini_api_key(api_key)
-            .ok_or_else(|| anyhow::anyhow!("Gemini API key required (set GOOGLE_API_KEY or GEMINI_API_KEY)"))?;
+        let api_key = settings::resolve_gemini_api_key(api_key).ok_or_else(|| {
+            anyhow::anyhow!("Gemini API key required (set GOOGLE_API_KEY or GEMINI_API_KEY)")
+        })?;
 
         Ok(Self {
             model: model.to_string(),
@@ -32,62 +34,77 @@ impl EmbeddingProvider for GeminiEmbedding {
             return Ok(Array2::zeros((0, self.dimensions)));
         }
 
-        // Gemini batch embedding API
-        let requests: Vec<serde_json::Value> = chunks
-            .iter()
-            .map(|text| {
-                serde_json::json!({
-                    "model": format!("models/{}", self.model),
-                    "content": {
-                        "parts": [{"text": text}]
-                    }
-                })
-            })
-            .collect();
-
-        let payload = serde_json::json!({
-            "requests": requests,
-        });
-
+        // Gemini limits to 100 requests per batch call (matches Python's max_batch_size=100)
+        let max_batch_size = 100;
         let url = format!(
             "https://generativelanguage.googleapis.com/v1beta/models/{}:batchEmbedContents?key={}",
             self.model, self.api_key
         );
 
-        let response = self.client.post(&url).json(&payload).send()?;
+        let mut all_data: Vec<f32> = Vec::new();
+        let mut dim: Option<usize> = None;
+        let num_batches = (chunks.len() + max_batch_size - 1) / max_batch_size;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().unwrap_or_default();
-            anyhow::bail!("Gemini API error ({}): {}", status, body);
-        }
+        for (i, batch) in chunks.chunks(max_batch_size).enumerate() {
+            info!(
+                "Gemini embedding batch {}/{} ({} chunks)",
+                i + 1,
+                num_batches,
+                batch.len()
+            );
+            let requests: Vec<serde_json::Value> = batch
+                .iter()
+                .map(|text| {
+                    serde_json::json!({
+                        "model": format!("models/{}", self.model),
+                        "content": {
+                            "parts": [{"text": text}]
+                        }
+                    })
+                })
+                .collect();
 
-        let body: serde_json::Value = response.json()?;
+            let payload = serde_json::json!({
+                "requests": requests,
+            });
 
-        let embeddings_array = body["embeddings"]
-            .as_array()
-            .ok_or_else(|| anyhow::anyhow!("Missing 'embeddings' in Gemini response"))?;
+            let response = self.client.post(&url).json(&payload).send()?;
 
-        if embeddings_array.is_empty() {
-            anyhow::bail!("Empty embeddings response from Gemini");
-        }
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().unwrap_or_default();
+                anyhow::bail!("Gemini API error ({}): {}", status, body);
+            }
 
-        let first_values = embeddings_array[0]["values"]
-            .as_array()
-            .ok_or_else(|| anyhow::anyhow!("Missing 'values' in embedding"))?;
-        let dim = first_values.len();
+            let body: serde_json::Value = response.json()?;
 
-        let mut data = Vec::with_capacity(chunks.len() * dim);
-        for emb in embeddings_array {
-            let values = emb["values"]
+            let embeddings_array = body["embeddings"]
                 .as_array()
-                .ok_or_else(|| anyhow::anyhow!("Missing 'values' in embedding"))?;
-            for v in values {
-                data.push(v.as_f64().unwrap_or(0.0) as f32);
+                .ok_or_else(|| anyhow::anyhow!("Missing 'embeddings' in Gemini response"))?;
+
+            if embeddings_array.is_empty() {
+                anyhow::bail!("Empty embeddings response from Gemini");
+            }
+
+            if dim.is_none() {
+                let first_values = embeddings_array[0]["values"]
+                    .as_array()
+                    .ok_or_else(|| anyhow::anyhow!("Missing 'values' in embedding"))?;
+                dim = Some(first_values.len());
+            }
+
+            for emb in embeddings_array {
+                let values = emb["values"]
+                    .as_array()
+                    .ok_or_else(|| anyhow::anyhow!("Missing 'values' in embedding"))?;
+                for v in values {
+                    all_data.push(v.as_f64().unwrap_or(0.0) as f32);
+                }
             }
         }
 
-        Ok(Array2::from_shape_vec((chunks.len(), dim), data)?)
+        let d = dim.ok_or_else(|| anyhow::anyhow!("No embeddings returned from Gemini"))?;
+        Ok(Array2::from_shape_vec((chunks.len(), d), all_data)?)
     }
 
     fn dimensions(&self) -> usize {
