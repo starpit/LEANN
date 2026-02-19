@@ -41,15 +41,6 @@ impl Ord for Candidate {
     }
 }
 
-/// Select the appropriate distance function based on metric.
-#[inline]
-fn select_dist_fn(metric: DistanceMetric) -> fn(&[f32], &[f32]) -> f32 {
-    match metric {
-        DistanceMetric::L2 => l2_distance,
-        DistanceMetric::Mips | DistanceMetric::Cosine => inner_product_distance,
-    }
-}
-
 /// Build an HNSW graph from dense vectors (single-threaded).
 pub fn build_hnsw(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGraph> {
     build_hnsw_serial(data, config)
@@ -71,12 +62,31 @@ pub fn build_hnsw_with_threads(
 
 /// Serial HNSW build (original implementation).
 fn build_hnsw_serial(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGraph> {
+    // Dispatch on metric to monomorphize — inlines SIMD distance into build loops.
+    match config.distance_metric {
+        DistanceMetric::L2 => build_hnsw_serial_inner(data, config, l2_distance),
+        DistanceMetric::Mips | DistanceMetric::Cosine => {
+            build_hnsw_serial_inner(data, config, inner_product_distance)
+        }
+    }
+}
+
+/// Monomorphized serial build. The generic `D` parameter lets the compiler
+/// inline the distance function into every call site.
+fn build_hnsw_serial_inner<D: Fn(&[f32], &[f32]) -> f32>(
+    data: &Array2<f32>,
+    config: &HnswConfig,
+    dist_fn: D,
+) -> Result<HnswGraph> {
     let n = data.nrows();
     let d = data.ncols();
 
     if n == 0 {
         anyhow::bail!("Cannot build HNSW from empty data");
     }
+
+    // Pre-flatten data to avoid per-call data.row().as_slice() overhead.
+    let flat: Vec<f32> = data.iter().copied().collect();
 
     // Compute level assignment probabilities
     let m = config.m;
@@ -108,9 +118,6 @@ fn build_hnsw_serial(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGrap
         cum_nneighbor_per_level.push(cum);
     }
 
-    // Total neighbor slots per node
-    let _total_neighbors_per_node = cum as usize;
-
     // Build offsets and allocate neighbors
     let mut offsets = Vec::with_capacity(n + 1);
     let mut current_offset = 0u64;
@@ -134,9 +141,6 @@ fn build_hnsw_serial(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGrap
     // Insert nodes one by one
     let mut entry_point: i32 = 0;
 
-    // Select SIMD-accelerated distance function
-    let dist_fn = select_dist_fn(config.distance_metric);
-
     // Allocate a single visited list, reused across all levels/nodes
     let mut visited = VisitedList::new(n);
 
@@ -154,13 +158,12 @@ fn build_hnsw_serial(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGrap
             continue;
         }
 
-        let query = data.row(i);
-        let query_slice = query.as_slice().unwrap();
+        let query_slice = &flat[i * d..(i + 1) * d];
 
         // Phase 1: Traverse from top level down to node_level+1 (greedy search to find entry point)
         let mut curr_entry = entry_point as usize;
         for level in (node_level as usize + 1..=max_level as usize).rev() {
-            let mut d_curr = dist_fn(query_slice, data.row(curr_entry).as_slice().unwrap());
+            let mut d_curr = dist_fn(query_slice, &flat[curr_entry * d..(curr_entry + 1) * d]);
             loop {
                 let mut changed = false;
                 let neighbor_slice = get_neighbors_mut_slice(
@@ -175,7 +178,7 @@ fn build_hnsw_serial(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGrap
                         continue;
                     }
                     let nb = nb as usize;
-                    let d_nb = dist_fn(query_slice, data.row(nb).as_slice().unwrap());
+                    let d_nb = dist_fn(query_slice, &flat[nb * d..(nb + 1) * d]);
                     if d_nb < d_curr {
                         curr_entry = nb;
                         d_curr = d_nb;
@@ -199,7 +202,7 @@ fn build_hnsw_serial(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGrap
             visited.reset();
             visited.set(i);
 
-            let d_entry = dist_fn(query_slice, data.row(curr_entry).as_slice().unwrap());
+            let d_entry = dist_fn(query_slice, &flat[curr_entry * d..(curr_entry + 1) * d]);
             candidates.push(Candidate {
                 distance: d_entry,
                 id: curr_entry,
@@ -235,7 +238,7 @@ fn build_hnsw_serial(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGrap
                         continue;
                     }
                     visited.set(nb);
-                    let d_nb = dist_fn(query_slice, data.row(nb).as_slice().unwrap());
+                    let d_nb = dist_fn(query_slice, &flat[nb * d..(nb + 1) * d]);
                     candidates.push(Candidate {
                         distance: d_nb,
                         id: nb,
@@ -267,8 +270,9 @@ fn build_hnsw_serial(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGrap
                     i as i32,
                     level,
                     max_neighbors,
-                    &data,
-                    dist_fn,
+                    &flat,
+                    d,
+                    &dist_fn,
                 );
             }
 
@@ -301,7 +305,25 @@ fn build_hnsw_parallel(
     config: &HnswConfig,
     num_threads: usize,
 ) -> Result<HnswGraph> {
+    // Dispatch on metric to monomorphize — inlines SIMD distance into build loops.
+    match config.distance_metric {
+        DistanceMetric::L2 => build_hnsw_parallel_inner(data, config, num_threads, l2_distance),
+        DistanceMetric::Mips | DistanceMetric::Cosine => {
+            build_hnsw_parallel_inner(data, config, num_threads, inner_product_distance)
+        }
+    }
+}
+
+/// Monomorphized parallel build. Generic `D` ensures the distance function
+/// is inlined into the hot loops rather than called through a function pointer.
+fn build_hnsw_parallel_inner<D: Fn(&[f32], &[f32]) -> f32 + Sync>(
+    data: &Array2<f32>,
+    config: &HnswConfig,
+    num_threads: usize,
+    dist_fn: D,
+) -> Result<HnswGraph> {
     let n = data.nrows();
+    let d = data.ncols();
 
     if n == 0 {
         anyhow::bail!("Cannot build HNSW from empty data");
@@ -310,7 +332,9 @@ fn build_hnsw_parallel(
     let m = config.m;
     let ml = 1.0 / (m as f64).ln();
     let ef = config.ef_construction;
-    let dist_fn = select_dist_fn(config.distance_metric);
+
+    // Pre-flatten data to avoid per-call data.row().as_slice() overhead.
+    let flat: Vec<f32> = data.iter().copied().collect();
 
     // Assign levels (sequential, fast)
     let mut rng = rand::thread_rng();
@@ -368,6 +392,7 @@ fn build_hnsw_parallel(
         .build()?;
 
     pool.install(|| {
+        let dist_ref = &dist_fn;
         (1..n).into_par_iter().for_each_init(
             // Per-thread buffer allocation (runs once per rayon worker)
             || {
@@ -380,13 +405,13 @@ fn build_hnsw_parallel(
             |(visited, candidates, result), i| {
                 let node_level = levels[i] - 1;
 
-                let query = data.row(i);
-                let query_slice = query.as_slice().unwrap();
+                let query_slice = &flat[i * d..(i + 1) * d];
 
                 // Phase 1: greedy descent from top level to node_level+1
                 let mut curr_entry = entry_point.load(AtomicOrdering::Relaxed) as usize;
                 for level in (node_level as usize + 1..=max_level as usize).rev() {
-                    let mut d_curr = dist_fn(query_slice, data.row(curr_entry).as_slice().unwrap());
+                    let mut d_curr =
+                        dist_ref(query_slice, &flat[curr_entry * d..(curr_entry + 1) * d]);
                     loop {
                         let mut changed = false;
                         let nb_slice = get_neighbors_atomic_slice(
@@ -402,7 +427,7 @@ fn build_hnsw_parallel(
                                 continue;
                             }
                             let nb = nb as usize;
-                            let d_nb = dist_fn(query_slice, data.row(nb).as_slice().unwrap());
+                            let d_nb = dist_ref(query_slice, &flat[nb * d..(nb + 1) * d]);
                             if d_nb < d_curr {
                                 curr_entry = nb;
                                 d_curr = d_nb;
@@ -424,7 +449,8 @@ fn build_hnsw_parallel(
                     visited.reset();
                     visited.set(i);
 
-                    let d_entry = dist_fn(query_slice, data.row(curr_entry).as_slice().unwrap());
+                    let d_entry =
+                        dist_ref(query_slice, &flat[curr_entry * d..(curr_entry + 1) * d]);
                     candidates.push(Candidate {
                         distance: d_entry,
                         id: curr_entry,
@@ -459,7 +485,7 @@ fn build_hnsw_parallel(
                                 continue;
                             }
                             visited.set(nb);
-                            let d_nb = dist_fn(query_slice, data.row(nb).as_slice().unwrap());
+                            let d_nb = dist_ref(query_slice, &flat[nb * d..(nb + 1) * d]);
                             candidates.push(Candidate {
                                 distance: d_nb,
                                 id: nb,
@@ -489,8 +515,9 @@ fn build_hnsw_parallel(
                             cand.id,
                             i as i32,
                             level,
-                            data,
-                            dist_fn,
+                            &flat,
+                            d,
+                            dist_ref,
                         );
                     }
 
@@ -636,16 +663,17 @@ fn get_neighbors_atomic_slice<'a>(
     }
 }
 
-fn add_reverse_connection(
+fn add_reverse_connection<D: Fn(&[f32], &[f32]) -> f32>(
     neighbors: &mut [i32],
     offsets: &[u64],
     cum_nn: &[i32],
     target: usize,
     source: i32,
     level: usize,
-    max_neighbors: usize,
-    data: &Array2<f32>,
-    dist_fn: fn(&[f32], &[f32]) -> f32,
+    _max_neighbors: usize,
+    flat: &[f32],
+    dim: usize,
+    dist_fn: &D,
 ) {
     let range = get_neighbor_range(offsets, cum_nn, target, level);
     if range.end > neighbors.len() {
@@ -661,9 +689,11 @@ fn add_reverse_connection(
     }
 
     // All slots full - replace the worst neighbor if the new one is better
-    let target_vec = data.row(target);
-    let target_slice = target_vec.as_slice().unwrap();
-    let source_dist = dist_fn(target_slice, data.row(source as usize).as_slice().unwrap());
+    let target_slice = &flat[target * dim..(target + 1) * dim];
+    let source_dist = dist_fn(
+        target_slice,
+        &flat[source as usize * dim..(source as usize + 1) * dim],
+    );
 
     let mut worst_idx = range.start;
     let mut worst_dist = f32::NEG_INFINITY;
@@ -673,7 +703,10 @@ fn add_reverse_connection(
         if nb < 0 {
             continue;
         }
-        let d = dist_fn(target_slice, data.row(nb as usize).as_slice().unwrap());
+        let d = dist_fn(
+            target_slice,
+            &flat[nb as usize * dim..(nb as usize + 1) * dim],
+        );
         if d > worst_dist {
             worst_dist = d;
             worst_idx = idx;
@@ -688,15 +721,16 @@ fn add_reverse_connection(
 /// Lock-free reverse connection using CAS (parallel path).
 /// Empty slot: CAS(-1, source). Replace worst: single CAS attempt — if lost, give up.
 /// HNSW is robust to slight suboptimality from lost races.
-fn add_reverse_connection_atomic(
+fn add_reverse_connection_atomic<D: Fn(&[f32], &[f32]) -> f32>(
     neighbors: &[AtomicI32],
     offsets: &[u64],
     cum_nn: &[i32],
     target: usize,
     source: i32,
     level: usize,
-    data: &Array2<f32>,
-    dist_fn: fn(&[f32], &[f32]) -> f32,
+    flat: &[f32],
+    dim: usize,
+    dist_fn: &D,
 ) {
     let range = get_neighbor_range(offsets, cum_nn, target, level);
     if range.end > neighbors.len() {
@@ -714,9 +748,11 @@ fn add_reverse_connection_atomic(
     }
 
     // All slots occupied — try to replace the worst neighbor
-    let target_vec = data.row(target);
-    let target_slice = target_vec.as_slice().unwrap();
-    let source_dist = dist_fn(target_slice, data.row(source as usize).as_slice().unwrap());
+    let target_slice = &flat[target * dim..(target + 1) * dim];
+    let source_dist = dist_fn(
+        target_slice,
+        &flat[source as usize * dim..(source as usize + 1) * dim],
+    );
 
     let mut worst_idx = range.start;
     let mut worst_dist = f32::NEG_INFINITY;
@@ -734,7 +770,10 @@ fn add_reverse_connection_atomic(
             }
             continue;
         }
-        let d = dist_fn(target_slice, data.row(nb as usize).as_slice().unwrap());
+        let d = dist_fn(
+            target_slice,
+            &flat[nb as usize * dim..(nb as usize + 1) * dim],
+        );
         if d > worst_dist {
             worst_dist = d;
             worst_idx = idx;

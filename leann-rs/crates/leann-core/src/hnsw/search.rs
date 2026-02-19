@@ -48,7 +48,7 @@ impl Default for SearchParams {
 }
 
 /// A neighbor candidate with distance.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct SearchCandidate {
     distance: f32,
     id: usize,
@@ -78,7 +78,7 @@ impl Ord for SearchCandidate {
 }
 
 /// Max-heap ordering for result set (largest distance first, so we can evict worst).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct MaxCandidate {
     distance: f32,
     id: usize,
@@ -114,12 +114,18 @@ pub struct SearchResults {
     pub distances: Vec<Vec<f32>>,
 }
 
-/// Select the appropriate distance function based on metric.
-#[inline]
-fn select_dist_fn(metric: crate::index::DistanceMetric) -> fn(&[f32], &[f32]) -> f32 {
-    match metric {
-        crate::index::DistanceMetric::L2 => l2_distance,
-        _ => inner_product_distance,
+/// Pre-allocated buffers for HNSW search. Reuse across multiple queries
+/// to avoid repeated O(n) allocation of the visited list.
+pub struct SearchBuffers {
+    visited: VisitedList,
+}
+
+impl SearchBuffers {
+    /// Create new search buffers for a graph with `ntotal` nodes.
+    pub fn new(ntotal: usize) -> Self {
+        Self {
+            visited: VisitedList::new(ntotal),
+        }
     }
 }
 
@@ -133,26 +139,90 @@ pub fn search_hnsw(
     vectors: &[f32], // flat array of all indexed vectors, row-major [ntotal * d]
     params: &SearchParams,
 ) -> (Vec<usize>, Vec<f32>) {
+    let mut buffers = SearchBuffers::new(graph.ntotal);
+    search_hnsw_buf(graph, query, top_k, vectors, params, &mut buffers)
+}
+
+/// Search the HNSW graph, reusing pre-allocated buffers.
+/// Use this when searching the same graph multiple times to avoid
+/// O(n) VisitedList allocation per call.
+pub fn search_hnsw_buf(
+    graph: &HnswGraph,
+    query: &[f32],
+    top_k: usize,
+    vectors: &[f32],
+    params: &SearchParams,
+    buffers: &mut SearchBuffers,
+) -> (Vec<usize>, Vec<f32>) {
+    // Dispatch on metric to monomorphize — allows compiler to inline
+    // the SIMD distance function into the search loop.
+    match graph.config.distance_metric {
+        crate::index::DistanceMetric::L2 => search_hnsw_inner(
+            graph,
+            query,
+            top_k,
+            vectors,
+            params,
+            &mut buffers.visited,
+            l2_distance,
+        ),
+        _ => search_hnsw_inner(
+            graph,
+            query,
+            top_k,
+            vectors,
+            params,
+            &mut buffers.visited,
+            inner_product_distance,
+        ),
+    }
+}
+
+/// Get a vector slice without bounds checking.
+///
+/// # Safety
+/// Caller must ensure `id * dim + dim <= vectors.len()`.
+#[inline(always)]
+unsafe fn get_vec(vectors: &[f32], id: usize, dim: usize) -> &[f32] {
+    debug_assert!(id * dim + dim <= vectors.len());
+    vectors.get_unchecked(id * dim..id * dim + dim)
+}
+
+/// Monomorphized search implementation. The generic `D` parameter ensures
+/// the distance function is inlined into the loop body rather than called
+/// through an indirect function pointer.
+fn search_hnsw_inner<D: Fn(&[f32], &[f32]) -> f32>(
+    graph: &HnswGraph,
+    query: &[f32],
+    top_k: usize,
+    vectors: &[f32],
+    params: &SearchParams,
+    visited: &mut VisitedList,
+    dist_fn: D,
+) -> (Vec<usize>, Vec<f32>) {
     let d = graph.dimensions;
     let ef = params.ef_search.max(top_k);
 
-    let dist_fn = select_dist_fn(graph.config.distance_metric);
+    // Safety invariant: vectors.len() >= graph.ntotal * d.
+    // All node IDs from the graph are < graph.ntotal, so get_vec is safe.
+    debug_assert!(vectors.len() >= graph.ntotal * d);
 
     // Phase 1: Greedy search from top level to level 1
     let mut curr = graph.entry_point as usize;
+    let mut d_curr = unsafe { dist_fn(query, get_vec(vectors, curr, d)) };
     for level in (1..=graph.max_level as usize).rev() {
         loop {
             let mut changed = false;
             let neighbors = graph.get_neighbors(curr, level);
             for &nb in neighbors {
                 if nb < 0 {
-                    continue;
+                    break; // valid neighbors are packed at front
                 }
                 let nb = nb as usize;
-                let d_nb = dist_fn(query, &vectors[nb * d..(nb + 1) * d]);
-                let d_curr = dist_fn(query, &vectors[curr * d..(curr + 1) * d]);
+                let d_nb = unsafe { dist_fn(query, get_vec(vectors, nb, d)) };
                 if d_nb < d_curr {
                     curr = nb;
+                    d_curr = d_nb;
                     changed = true;
                 }
             }
@@ -163,12 +233,11 @@ pub fn search_hnsw(
     }
 
     // Phase 2: Search at level 0 with ef candidates
-    let mut candidates = BinaryHeap::new(); // min-heap
-    let mut results = BinaryHeap::new(); // max-heap (for eviction)
-    let mut visited = VisitedList::new(graph.ntotal);
+    let mut candidates = BinaryHeap::with_capacity(ef * 2); // min-heap
+    let mut results = BinaryHeap::with_capacity(ef); // max-heap (for eviction)
     visited.reset();
 
-    let d_entry = dist_fn(query, &vectors[curr * d..(curr + 1) * d]);
+    let d_entry = unsafe { dist_fn(query, get_vec(vectors, curr, d)) };
     candidates.push(SearchCandidate {
         distance: d_entry,
         id: curr,
@@ -179,20 +248,19 @@ pub fn search_hnsw(
     });
     visited.set(curr);
 
+    // Cache worst distance to avoid heap peek on every neighbor check.
+    let mut worst_dist = d_entry;
+
     while let Some(cand) = candidates.pop() {
         // If candidate is worse than worst result and we have enough results, stop
-        if results.len() >= ef {
-            if let Some(worst) = results.peek() {
-                if cand.distance > worst.distance {
-                    break;
-                }
-            }
+        if results.len() >= ef && cand.distance > worst_dist {
+            break;
         }
 
         let neighbors = graph.get_neighbors(cand.id, 0);
         for &nb in neighbors {
             if nb < 0 {
-                continue;
+                break; // valid neighbors are packed at front
             }
             let nb = nb as usize;
             if visited.is_visited(nb) {
@@ -200,7 +268,7 @@ pub fn search_hnsw(
             }
             visited.set(nb);
 
-            let d_nb = dist_fn(query, &vectors[nb * d..(nb + 1) * d]);
+            let d_nb = unsafe { dist_fn(query, get_vec(vectors, nb, d)) };
 
             // Add to results if better than worst, or if not full yet
             if results.len() < ef {
@@ -212,34 +280,33 @@ pub fn search_hnsw(
                     distance: d_nb,
                     id: nb,
                 });
-            } else if let Some(worst) = results.peek() {
-                if d_nb < worst.distance {
-                    candidates.push(SearchCandidate {
-                        distance: d_nb,
-                        id: nb,
-                    });
-                    results.pop();
-                    results.push(MaxCandidate {
-                        distance: d_nb,
-                        id: nb,
-                    });
+                if results.len() == ef {
+                    worst_dist = results.peek().unwrap().distance;
                 }
+            } else if d_nb < worst_dist {
+                candidates.push(SearchCandidate {
+                    distance: d_nb,
+                    id: nb,
+                });
+                results.pop();
+                results.push(MaxCandidate {
+                    distance: d_nb,
+                    id: nb,
+                });
+                worst_dist = results.peek().unwrap().distance;
             }
         }
     }
 
-    // Collect and sort results
-    let mut result_vec: Vec<(usize, f32)> = results
-        .into_sorted_vec()
-        .into_iter()
-        .map(|c| (c.id, c.distance))
-        .collect();
+    // Collect results — into_sorted_vec() returns ascending distance order
+    let result_vec = results.into_sorted_vec();
 
-    result_vec.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
-    result_vec.truncate(top_k);
-
-    let labels: Vec<usize> = result_vec.iter().map(|(id, _)| *id).collect();
-    let distances: Vec<f32> = result_vec.iter().map(|(_, d)| *d).collect();
+    let mut labels = Vec::with_capacity(top_k);
+    let mut distances = Vec::with_capacity(top_k);
+    for c in result_vec.into_iter().take(top_k) {
+        labels.push(c.id);
+        distances.push(c.distance);
+    }
 
     (labels, distances)
 }
@@ -259,6 +326,10 @@ where
     F: FnMut(&[usize], &[f32]) -> Vec<f32>,
 {
     let ef = params.ef_search.max(top_k);
+    let max_neighbors = graph.neighbors_at_level(0);
+
+    // Pre-allocate scratch buffers reused across iterations
+    let mut node_buf = Vec::with_capacity(max_neighbors + 1);
 
     // Phase 1: Greedy search from top level to level 1
     let mut curr = graph.entry_point as usize;
@@ -266,24 +337,26 @@ where
         loop {
             let mut changed = false;
             let neighbors = graph.get_neighbors(curr, level);
-            let valid_neighbors: Vec<usize> = neighbors
-                .iter()
-                .filter(|&&nb| nb >= 0)
-                .map(|&nb| nb as usize)
-                .collect();
 
-            if valid_neighbors.is_empty() {
+            node_buf.clear();
+            for &nb in neighbors {
+                if nb >= 0 {
+                    node_buf.push(nb as usize);
+                }
+            }
+
+            if node_buf.is_empty() {
                 break;
             }
 
-            let mut all_nodes = valid_neighbors.clone();
-            all_nodes.push(curr);
-            let distances = compute_distance(&all_nodes, query);
+            node_buf.push(curr);
+            let distances = compute_distance(&node_buf, query);
 
             let curr_dist = *distances.last().unwrap();
-            for (i, &nb) in valid_neighbors.iter().enumerate() {
+            let valid_count = node_buf.len() - 1;
+            for i in 0..valid_count {
                 if distances[i] < curr_dist {
-                    curr = nb;
+                    curr = node_buf[i];
                     changed = true;
                 }
             }
@@ -294,8 +367,8 @@ where
     }
 
     // Phase 2: ef-search at level 0
-    let mut candidates = BinaryHeap::new();
-    let mut results = BinaryHeap::new();
+    let mut candidates = BinaryHeap::with_capacity(ef * 2);
+    let mut results = BinaryHeap::with_capacity(ef);
     let mut visited = VisitedList::new(graph.ntotal);
     visited.reset();
 
@@ -321,27 +394,25 @@ where
         }
 
         let neighbors = graph.get_neighbors(cand.id, 0);
-        let unvisited: Vec<usize> = neighbors
-            .iter()
-            .filter(|&&nb| nb >= 0)
-            .map(|&nb| nb as usize)
-            .filter(|&nb| {
-                if visited.is_visited(nb) {
-                    false
-                } else {
-                    visited.set(nb);
-                    true
-                }
-            })
-            .collect();
 
-        if unvisited.is_empty() {
+        node_buf.clear();
+        for &nb in neighbors {
+            if nb >= 0 {
+                let nb = nb as usize;
+                if !visited.is_visited(nb) {
+                    visited.set(nb);
+                    node_buf.push(nb);
+                }
+            }
+        }
+
+        if node_buf.is_empty() {
             continue;
         }
 
-        let distances = compute_distance(&unvisited, query);
+        let distances = compute_distance(&node_buf, query);
 
-        for (i, &nb) in unvisited.iter().enumerate() {
+        for (i, &nb) in node_buf.iter().enumerate() {
             let d_nb = distances[i];
 
             if results.len() < ef {
@@ -369,18 +440,15 @@ where
         }
     }
 
-    // Collect results
-    let mut result_vec: Vec<(usize, f32)> = results
-        .into_sorted_vec()
-        .into_iter()
-        .map(|c| (c.id, c.distance))
-        .collect();
+    // Collect results — into_sorted_vec() returns ascending distance order
+    let result_vec = results.into_sorted_vec();
 
-    result_vec.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
-    result_vec.truncate(top_k);
-
-    let labels: Vec<usize> = result_vec.iter().map(|(id, _)| *id).collect();
-    let distances: Vec<f32> = result_vec.iter().map(|(_, d)| *d).collect();
+    let mut labels = Vec::with_capacity(top_k);
+    let mut distances = Vec::with_capacity(top_k);
+    for c in result_vec.into_iter().take(top_k) {
+        labels.push(c.id);
+        distances.push(c.distance);
+    }
 
     (labels, distances)
 }

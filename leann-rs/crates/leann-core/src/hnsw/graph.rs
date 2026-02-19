@@ -95,6 +95,7 @@ pub const FOURCC_NULL: u32 = u32::from_le_bytes(*b"null");
 
 impl HnswGraph {
     /// Get the number of neighbors at a given level using cumulative neighbor counts.
+    #[inline]
     pub fn neighbors_at_level(&self, level: usize) -> usize {
         if level == 0 {
             if self.cum_nneighbor_per_level.is_empty() {
@@ -109,6 +110,7 @@ impl HnswGraph {
     }
 
     /// Get neighbors of a node at a specific level (standard format).
+    #[inline]
     pub fn get_neighbors(&self, node: usize, level: usize) -> &[i32] {
         match &self.storage {
             GraphStorage::Standard { offsets, neighbors } => {

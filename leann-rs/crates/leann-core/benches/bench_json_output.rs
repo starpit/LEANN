@@ -16,7 +16,9 @@ use std::time::Instant;
 use leann_core::hnsw::build::{build_hnsw, build_hnsw_with_threads};
 use leann_core::hnsw::graph::HnswConfig;
 use leann_core::hnsw::io::{read_hnsw_index, write_hnsw_standard};
-use leann_core::hnsw::search::{search_hnsw, search_hnsw_recompute, SearchParams};
+use leann_core::hnsw::search::{
+    search_hnsw, search_hnsw_buf, search_hnsw_recompute, SearchBuffers, SearchParams,
+};
 use leann_core::hnsw::simd::{inner_product_distance, l2_distance};
 
 fn gen_vectors(rng: &mut StdRng, n: usize, d: usize) -> Array2<f32> {
@@ -58,6 +60,8 @@ struct BenchResult {
     mean_ms: f64,
     median_us: f64,
     mean_us: f64,
+    median_ns: f64,
+    mean_ns: f64,
 }
 
 impl BenchResult {
@@ -69,6 +73,8 @@ impl BenchResult {
             mean_ms: mean * 1e3,
             median_us: median * 1e6,
             mean_us: mean * 1e6,
+            median_ns: median * 1e9,
+            mean_ns: mean * 1e9,
         }
     }
 }
@@ -85,7 +91,10 @@ fn main() {
     eprintln!("=== LEANN Rust HNSW Benchmarks (JSON output) ===");
 
     // ── Distance computation ────────────────────────────────────────
+    // Batch multiple calls per timing interval to overcome Instant::now() overhead
+    // (~20-50ns on macOS), which would drown out sub-100ns operations.
     eprintln!("\n[1/5] Distance computation...");
+    let dist_batch = 1000;
     for dim in [128, 384, 768] {
         let mut rng = StdRng::seed_from_u64(42);
         let a: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>()).collect();
@@ -93,26 +102,30 @@ fn main() {
 
         let (med, mean) = bench_fn(
             || {
-                black_box(l2_distance(black_box(&a), black_box(&b)));
+                for _ in 0..dist_batch {
+                    black_box(l2_distance(black_box(&a), black_box(&b)));
+                }
             },
-            1000,
-            10_000,
+            100,
+            1_000,
         );
         results.insert(
             format!("distance/l2/{dim}"),
-            BenchResult::from_secs(med, mean),
+            BenchResult::from_secs(med / dist_batch as f64, mean / dist_batch as f64),
         );
 
         let (med, mean) = bench_fn(
             || {
-                black_box(inner_product_distance(black_box(&a), black_box(&b)));
+                for _ in 0..dist_batch {
+                    black_box(inner_product_distance(black_box(&a), black_box(&b)));
+                }
             },
-            1000,
-            10_000,
+            100,
+            1_000,
         );
         results.insert(
             format!("distance/ip/{dim}"),
-            BenchResult::from_secs(med, mean),
+            BenchResult::from_secs(med / dist_batch as f64, mean / dist_batch as f64),
         );
     }
 
@@ -168,6 +181,9 @@ fn main() {
         let flat_vectors: Vec<f32> = data.iter().copied().collect();
         let query = gen_query(&mut rng, d);
 
+        // Pre-allocate buffers once, reuse across all search calls
+        let mut buffers = SearchBuffers::new(graph.ntotal);
+
         for ef in [16, 32, 64, 128, 256] {
             let params = SearchParams {
                 ef_search: ef,
@@ -175,7 +191,14 @@ fn main() {
             };
             let (med, mean) = bench_fn(
                 || {
-                    let _ = search_hnsw(&graph, &query, top_k, &flat_vectors, &params);
+                    let _ = search_hnsw_buf(
+                        &graph,
+                        &query,
+                        top_k,
+                        &flat_vectors,
+                        &params,
+                        &mut buffers,
+                    );
                 },
                 100,
                 1000,
@@ -282,6 +305,8 @@ fn main() {
                     mean_ms: buf.len() as f64,
                     median_us: buf.len() as f64,
                     mean_us: buf.len() as f64,
+                    median_ns: buf.len() as f64,
+                    mean_ns: buf.len() as f64,
                 },
             );
         }
