@@ -213,23 +213,42 @@ A LEANN index consists of:
 
 ## Benchmarks
 
-Criterion benchmarks for the pure-Rust HNSW engine, plus a comparison suite against the Python FAISS C++ backend:
+Criterion benchmarks for the pure-Rust HNSW engine, plus a comparison suite against the Python FAISS C++ backend.
+
+### Criterion benchmarks
 
 ```bash
-# Run Criterion benchmarks (HTML reports in target/criterion/)
+# Run all Criterion benchmarks (HTML reports in target/criterion/)
 cargo bench --package leann-core
 
 # Run a specific benchmark group
 cargo bench --package leann-core -- "distance"
+```
 
-# JSON output for scripted comparison
-cargo bench --package leann-core --bench bench_json_output
+### Rust vs Python comparison
 
-# Full Rust vs Python (FAISS C++) comparison
+The quickest way is the all-in-one script (from the repo root):
+
+```bash
 cd /path/to/LEANN && bash benchmarks/compare_rust_python.sh
 
 # Skip 50K-vector benchmarks for faster runs
 SKIP_LARGE=1 bash benchmarks/compare_rust_python.sh
+```
+
+To run each step manually:
+
+```bash
+# 1. Generate Rust results (from leann-rs/)
+mkdir -p ../benchmarks/results
+cargo bench --package leann-core --bench bench_json_output > ../benchmarks/results/rust_results.json
+
+# 2. Generate Python (FAISS C++) results (from repo root)
+cd /path/to/LEANN
+uv run python benchmarks/rust_vs_python.py --json > benchmarks/results/python_results.json
+
+# 3. Compare
+uv run python benchmarks/compare_results.py
 ```
 
 ### Benchmark groups
