@@ -47,6 +47,8 @@ pub fn build_hnsw(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGraph> 
 }
 
 /// Build an HNSW graph with the specified number of threads.
+/// Creates a new rayon thread pool per call. If you're building multiple
+/// indexes, use [`build_hnsw_with_pool`] to reuse a single pool.
 /// Falls back to the serial path when `num_threads <= 1`.
 pub fn build_hnsw_with_threads(
     data: &Array2<f32>,
@@ -56,8 +58,21 @@ pub fn build_hnsw_with_threads(
     if num_threads <= 1 {
         build_hnsw_serial(data, config)
     } else {
-        build_hnsw_parallel(data, config, num_threads)
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .build()?;
+        build_hnsw_with_pool(data, config, &pool)
     }
+}
+
+/// Build an HNSW graph using an existing rayon thread pool.
+/// Avoids the ~0.5-1ms cost of creating a new pool per call.
+pub fn build_hnsw_with_pool(
+    data: &Array2<f32>,
+    config: &HnswConfig,
+    pool: &rayon::ThreadPool,
+) -> Result<HnswGraph> {
+    build_hnsw_parallel(data, config, pool)
 }
 
 /// Serial HNSW build (original implementation).
@@ -303,13 +318,13 @@ fn build_hnsw_serial_inner<D: Fn(&[f32], &[f32]) -> f32>(
 fn build_hnsw_parallel(
     data: &Array2<f32>,
     config: &HnswConfig,
-    num_threads: usize,
+    pool: &rayon::ThreadPool,
 ) -> Result<HnswGraph> {
     // Dispatch on metric to monomorphize — inlines SIMD distance into build loops.
     match config.distance_metric {
-        DistanceMetric::L2 => build_hnsw_parallel_inner(data, config, num_threads, l2_distance),
+        DistanceMetric::L2 => build_hnsw_parallel_inner(data, config, pool, l2_distance),
         DistanceMetric::Mips | DistanceMetric::Cosine => {
-            build_hnsw_parallel_inner(data, config, num_threads, inner_product_distance)
+            build_hnsw_parallel_inner(data, config, pool, inner_product_distance)
         }
     }
 }
@@ -319,7 +334,7 @@ fn build_hnsw_parallel(
 fn build_hnsw_parallel_inner<D: Fn(&[f32], &[f32]) -> f32 + Sync>(
     data: &Array2<f32>,
     config: &HnswConfig,
-    num_threads: usize,
+    pool: &rayon::ThreadPool,
     dist_fn: D,
 ) -> Result<HnswGraph> {
     let n = data.nrows();
@@ -385,11 +400,6 @@ fn build_hnsw_parallel_inner<D: Fn(&[f32], &[f32]) -> f32 + Sync>(
 
     // Atomic entry point (updated via CAS when a higher-level node appears)
     let entry_point = AtomicI32::new(0);
-
-    // Build a scoped rayon thread pool (does not touch the global pool)
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(num_threads)
-        .build()?;
 
     pool.install(|| {
         let dist_ref = &dist_fn;

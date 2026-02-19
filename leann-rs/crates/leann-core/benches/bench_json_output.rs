@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::hint::black_box;
 use std::time::Instant;
 
-use leann_core::hnsw::build::{build_hnsw, build_hnsw_with_threads};
+use leann_core::hnsw::build::{build_hnsw, build_hnsw_with_pool};
 use leann_core::hnsw::graph::HnswConfig;
 use leann_core::hnsw::io::{read_hnsw_index, write_hnsw_standard};
 use leann_core::hnsw::search::{
@@ -85,6 +85,12 @@ fn main() {
         .map(|n| n.get())
         .unwrap_or(1);
     let mut results: BTreeMap<String, BenchResult> = BTreeMap::new();
+
+    // Create one thread pool, reused across all parallel builds.
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(num_threads)
+        .build()
+        .unwrap();
 
     eprintln!("Using {num_threads} threads for parallel builds");
 
@@ -160,7 +166,7 @@ fn main() {
         };
         let (med, mean) = bench_fn(
             || {
-                let _ = build_hnsw_with_threads(&data, &config, num_threads).unwrap();
+                let _ = build_hnsw_with_pool(&data, &config, &pool).unwrap();
             },
             1,
             repeats,
@@ -272,7 +278,7 @@ fn main() {
             let repeats = if n >= 10_000 { 3 } else { 5 };
             let (med, mean) = bench_fn(
                 || {
-                    let graph = build_hnsw_with_threads(&data, &config, num_threads).unwrap();
+                    let graph = build_hnsw_with_pool(&data, &config, &pool).unwrap();
                     let mut buf = Vec::new();
                     write_hnsw_standard(&mut buf, &graph).unwrap();
                     let mut cursor = std::io::Cursor::new(&buf);
@@ -293,7 +299,7 @@ fn main() {
             );
 
             // Also measure index size
-            let graph = build_hnsw_with_threads(&data, &config, num_threads).unwrap();
+            let graph = build_hnsw_with_pool(&data, &config, &pool).unwrap();
             let mut buf = Vec::new();
             write_hnsw_standard(&mut buf, &graph).unwrap();
             results.insert(
