@@ -5,6 +5,7 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
 use super::graph::*;
+use super::simd::{inner_product_distance, l2_distance, VisitedList};
 use crate::index::DistanceMetric;
 
 /// A candidate neighbor during search/build.
@@ -34,6 +35,15 @@ impl Ord for Candidate {
             .distance
             .partial_cmp(&self.distance)
             .unwrap_or(Ordering::Equal)
+    }
+}
+
+/// Select the appropriate distance function based on metric.
+#[inline]
+fn select_dist_fn(metric: DistanceMetric) -> fn(&[f32], &[f32]) -> f32 {
+    match metric {
+        DistanceMetric::L2 => l2_distance,
+        DistanceMetric::Mips | DistanceMetric::Cosine => inner_product_distance,
     }
 }
 
@@ -77,7 +87,7 @@ pub fn build_hnsw(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGraph> 
     }
 
     // Total neighbor slots per node
-    let total_neighbors_per_node = cum as usize;
+    let _total_neighbors_per_node = cum as usize;
 
     // Build offsets and allocate neighbors
     let mut offsets = Vec::with_capacity(n + 1);
@@ -102,16 +112,11 @@ pub fn build_hnsw(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGraph> 
     // Insert nodes one by one
     let mut entry_point: i32 = 0;
 
-    // Helper: compute distance between two vectors
-    let dist_fn = match config.distance_metric {
-        DistanceMetric::L2 => |a: &[f32], b: &[f32]| -> f32 {
-            a.iter().zip(b.iter()).map(|(x, y)| (x - y) * (x - y)).sum()
-        },
-        DistanceMetric::Mips | DistanceMetric::Cosine => |a: &[f32], b: &[f32]| -> f32 {
-            // For MIPS, we negate the inner product to use as "distance" (lower = more similar)
-            -a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f32>()
-        },
-    };
+    // Select SIMD-accelerated distance function
+    let dist_fn = select_dist_fn(config.distance_metric);
+
+    // Allocate a single visited list, reused across all levels/nodes
+    let mut visited = VisitedList::new(n);
 
     for i in 0..n {
         let node_level = levels[i] - 1; // max level for this node
@@ -164,15 +169,15 @@ pub fn build_hnsw(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGraph> 
 
             // Greedy search for ef candidates
             let mut candidates = BinaryHeap::new();
-            let mut visited = vec![false; n];
-            visited[i] = true;
+            visited.reset();
+            visited.set(i);
 
             let d_entry = dist_fn(query_slice, data.row(curr_entry).as_slice().unwrap());
             candidates.push(Candidate {
                 distance: d_entry,
                 id: curr_entry,
             });
-            visited[curr_entry] = true;
+            visited.set(curr_entry);
 
             let mut result: Vec<Candidate> = Vec::new();
 
@@ -201,10 +206,10 @@ pub fn build_hnsw(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGraph> 
                         continue;
                     }
                     let nb = nb as usize;
-                    if visited[nb] {
+                    if visited.is_visited(nb) {
                         continue;
                     }
-                    visited[nb] = true;
+                    visited.set(nb);
                     let d_nb = dist_fn(query_slice, data.row(nb).as_slice().unwrap());
                     candidates.push(Candidate {
                         distance: d_nb,
@@ -238,7 +243,7 @@ pub fn build_hnsw(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGraph> 
                     level,
                     max_neighbors,
                     &data,
-                    &dist_fn,
+                    dist_fn,
                 );
             }
 
@@ -327,7 +332,7 @@ fn add_reverse_connection(
     level: usize,
     max_neighbors: usize,
     data: &Array2<f32>,
-    dist_fn: &dyn Fn(&[f32], &[f32]) -> f32,
+    dist_fn: fn(&[f32], &[f32]) -> f32,
 ) {
     let range = get_neighbor_range(offsets, cum_nn, target, level);
     if range.end > neighbors.len() {

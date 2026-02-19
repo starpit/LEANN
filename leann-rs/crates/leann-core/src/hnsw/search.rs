@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
 use super::graph::*;
+use super::simd::{inner_product_distance, l2_distance, VisitedList};
 
 /// Search parameters for HNSW search.
 #[derive(Debug, Clone)]
@@ -113,6 +114,15 @@ pub struct SearchResults {
     pub distances: Vec<Vec<f32>>,
 }
 
+/// Select the appropriate distance function based on metric.
+#[inline]
+fn select_dist_fn(metric: crate::index::DistanceMetric) -> fn(&[f32], &[f32]) -> f32 {
+    match metric {
+        crate::index::DistanceMetric::L2 => l2_distance,
+        _ => inner_product_distance,
+    }
+}
+
 /// Search the HNSW graph for nearest neighbors using stored vectors.
 ///
 /// This function searches when all vectors are available in memory (non-recompute mode).
@@ -126,14 +136,7 @@ pub fn search_hnsw(
     let d = graph.dimensions;
     let ef = params.ef_search.max(top_k);
 
-    let dist_fn: Box<dyn Fn(&[f32], &[f32]) -> f32> = match graph.config.distance_metric {
-        crate::index::DistanceMetric::L2 => Box::new(|a: &[f32], b: &[f32]| -> f32 {
-            a.iter().zip(b.iter()).map(|(x, y)| (x - y) * (x - y)).sum()
-        }),
-        _ => Box::new(|a: &[f32], b: &[f32]| -> f32 {
-            -a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f32>()
-        }),
-    };
+    let dist_fn = select_dist_fn(graph.config.distance_metric);
 
     // Phase 1: Greedy search from top level to level 1
     let mut curr = graph.entry_point as usize;
@@ -162,7 +165,8 @@ pub fn search_hnsw(
     // Phase 2: Search at level 0 with ef candidates
     let mut candidates = BinaryHeap::new(); // min-heap
     let mut results = BinaryHeap::new(); // max-heap (for eviction)
-    let mut visited = vec![false; graph.ntotal];
+    let mut visited = VisitedList::new(graph.ntotal);
+    visited.reset();
 
     let d_entry = dist_fn(query, &vectors[curr * d..(curr + 1) * d]);
     candidates.push(SearchCandidate {
@@ -173,7 +177,7 @@ pub fn search_hnsw(
         distance: d_entry,
         id: curr,
     });
-    visited[curr] = true;
+    visited.set(curr);
 
     while let Some(cand) = candidates.pop() {
         // If candidate is worse than worst result and we have enough results, stop
@@ -191,10 +195,10 @@ pub fn search_hnsw(
                 continue;
             }
             let nb = nb as usize;
-            if visited[nb] {
+            if visited.is_visited(nb) {
                 continue;
             }
-            visited[nb] = true;
+            visited.set(nb);
 
             let d_nb = dist_fn(query, &vectors[nb * d..(nb + 1) * d]);
 
@@ -292,7 +296,8 @@ where
     // Phase 2: ef-search at level 0
     let mut candidates = BinaryHeap::new();
     let mut results = BinaryHeap::new();
-    let mut visited = vec![false; graph.ntotal];
+    let mut visited = VisitedList::new(graph.ntotal);
+    visited.reset();
 
     let entry_dists = compute_distance(&[curr], query);
     let d_entry = entry_dists[0];
@@ -304,7 +309,7 @@ where
         distance: d_entry,
         id: curr,
     });
-    visited[curr] = true;
+    visited.set(curr);
 
     while let Some(cand) = candidates.pop() {
         if results.len() >= ef {
@@ -321,10 +326,10 @@ where
             .filter(|&&nb| nb >= 0)
             .map(|&nb| nb as usize)
             .filter(|&nb| {
-                if visited[nb] {
+                if visited.is_visited(nb) {
                     false
                 } else {
-                    visited[nb] = true;
+                    visited.set(nb);
                     true
                 }
             })

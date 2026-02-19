@@ -9,6 +9,7 @@ use crate::hnsw::build::build_hnsw;
 use crate::hnsw::csr::convert_to_csr;
 use crate::hnsw::graph::{HnswConfig, VectorStorage};
 use crate::hnsw::io::{write_hnsw_compact, write_hnsw_standard};
+use crate::hnsw::simd::normalize_l2_inplace;
 use crate::index::{DistanceMetric, IndexMeta, IndexPaths, PassageSource};
 use crate::passages::{write_id_map, write_passages, Passage};
 
@@ -119,22 +120,42 @@ impl LeannBuilder {
         // Create directory
         std::fs::create_dir_all(&paths.base_dir)?;
 
-        // Write passages
-        write_passages(&self.chunks, &paths.passages_path(), &paths.offset_path())?;
-
-        // Compute embeddings
+        // Collect texts for embedding computation before entering scope
         let texts: Vec<String> = self.chunks.iter().map(|c| c.text.clone()).collect();
-        info!("Computing embeddings for {} chunks", texts.len());
-        let mut embeddings = provider.compute_embeddings(&texts)?;
+        let ids: Vec<String> = self.chunks.iter().map(|c| c.id.clone()).collect();
+
+        // Run passage/ID writing (CPU/IO) and embedding computation (GPU) in parallel.
+        // write_passages serializes 322K+ passages as JSONL which takes ~80s for large
+        // indexes; overlapping with GPU embedding hides this latency entirely.
+        let (write_result, embed_result) = std::thread::scope(|s| {
+            let passages_path = paths.passages_path();
+            let offset_path = paths.offset_path();
+            let id_map_path = paths.id_map_path();
+            let chunks = &self.chunks;
+            let ids_ref = &ids;
+
+            let writer = s.spawn(move || -> Result<()> {
+                info!("Writing {} passages to disk", chunks.len());
+                write_passages(chunks, &passages_path, &offset_path)?;
+                write_id_map(ids_ref, &id_map_path)?;
+                info!("Passage writing complete");
+                Ok(())
+            });
+
+            info!("Computing embeddings for {} chunks", texts.len());
+            let emb = provider.compute_embeddings(&texts);
+
+            let wr = writer.join().expect("passage writer thread panicked");
+            (wr, emb)
+        });
+
+        write_result?;
+        let mut embeddings = embed_result?;
 
         // Normalize for cosine distance
         if self.config.distance_metric == DistanceMetric::Cosine {
             normalize_l2_inplace(&mut embeddings);
         }
-
-        // Write ID map
-        let ids: Vec<String> = self.chunks.iter().map(|c| c.id.clone()).collect();
-        write_id_map(&ids, &paths.id_map_path())?;
 
         // Build HNSW graph
         info!(
@@ -345,15 +366,5 @@ impl LeannBuilder {
 
         meta.save(&paths.meta_path())?;
         Ok(())
-    }
-}
-
-/// Normalize rows to unit L2 norm in-place.
-fn normalize_l2_inplace(data: &mut Array2<f32>) {
-    for mut row in data.rows_mut() {
-        let norm: f32 = row.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if norm > 0.0 {
-            row.mapv_inplace(|x| x / norm);
-        }
     }
 }
