@@ -10,9 +10,10 @@ use ndarray::Array2;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::collections::BTreeMap;
+use std::hint::black_box;
 use std::time::Instant;
 
-use leann_core::hnsw::build::build_hnsw;
+use leann_core::hnsw::build::{build_hnsw, build_hnsw_with_threads};
 use leann_core::hnsw::graph::HnswConfig;
 use leann_core::hnsw::io::{read_hnsw_index, write_hnsw_standard};
 use leann_core::hnsw::search::{search_hnsw, search_hnsw_recompute, SearchParams};
@@ -74,7 +75,12 @@ impl BenchResult {
 
 fn main() {
     let skip_large = std::env::args().any(|a| a == "--skip-large");
+    let num_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
     let mut results: BTreeMap<String, BenchResult> = BTreeMap::new();
+
+    eprintln!("Using {num_threads} threads for parallel builds");
 
     eprintln!("=== LEANN Rust HNSW Benchmarks (JSON output) ===");
 
@@ -87,7 +93,7 @@ fn main() {
 
         let (med, mean) = bench_fn(
             || {
-                let _ = l2_distance(&a, &b);
+                black_box(l2_distance(black_box(&a), black_box(&b)));
             },
             1000,
             10_000,
@@ -99,7 +105,7 @@ fn main() {
 
         let (med, mean) = bench_fn(
             || {
-                let _ = inner_product_distance(&a, &b);
+                black_box(inner_product_distance(black_box(&a), black_box(&b)));
             },
             1000,
             10_000,
@@ -141,7 +147,7 @@ fn main() {
         };
         let (med, mean) = bench_fn(
             || {
-                let _ = build_hnsw(&data, &config).unwrap();
+                let _ = build_hnsw_with_threads(&data, &config, num_threads).unwrap();
             },
             1,
             repeats,
@@ -243,7 +249,7 @@ fn main() {
             let repeats = if n >= 10_000 { 3 } else { 5 };
             let (med, mean) = bench_fn(
                 || {
-                    let graph = build_hnsw(&data, &config).unwrap();
+                    let graph = build_hnsw_with_threads(&data, &config, num_threads).unwrap();
                     let mut buf = Vec::new();
                     write_hnsw_standard(&mut buf, &graph).unwrap();
                     let mut cursor = std::io::Cursor::new(&buf);
@@ -264,7 +270,7 @@ fn main() {
             );
 
             // Also measure index size
-            let graph = build_hnsw(&data, &config).unwrap();
+            let graph = build_hnsw_with_threads(&data, &config, num_threads).unwrap();
             let mut buf = Vec::new();
             write_hnsw_standard(&mut buf, &graph).unwrap();
             results.insert(
