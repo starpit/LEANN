@@ -554,13 +554,14 @@ fn cmd_build(args: BuildArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Classify docs paths
+    // Classify docs paths (use !is_dir for files to support named pipes/fifos
+    // from process substitution like <(cat file))
+    let directories: Vec<&String> = args.docs.iter().filter(|p| Path::new(p).is_dir()).collect();
     let files: Vec<&String> = args
         .docs
         .iter()
-        .filter(|p| Path::new(p).is_file())
+        .filter(|p| !Path::new(p).is_dir())
         .collect();
-    let directories: Vec<&String> = args.docs.iter().filter(|p| Path::new(p).is_dir()).collect();
 
     println!("Indexing {} path(s):", args.docs.len());
     if !files.is_empty() {
@@ -600,7 +601,12 @@ fn cmd_build(args: BuildArgs) -> Result<()> {
     let mut documents = Vec::new();
     for doc_path in &args.docs {
         let p = Path::new(doc_path);
-        if p.is_file() {
+        if p.is_dir() {
+            let loaded = load_documents(p, allowed_extensions.as_deref(), args.include_hidden)?;
+            documents.extend(loaded);
+        } else if p.exists() {
+            // Handles regular files, named pipes/fifos (from process substitution
+            // like <(cat file)), and other readable non-directory paths
             match leann_core::document_loaders::extract_text(p) {
                 Ok(Some(content)) => {
                     documents.push((p.to_string_lossy().to_string(), content));
@@ -612,9 +618,6 @@ fn cmd_build(args: BuildArgs) -> Result<()> {
                     eprintln!("Warning: failed to read {}: {}", doc_path, e);
                 }
             }
-        } else if p.is_dir() {
-            let loaded = load_documents(p, allowed_extensions.as_deref(), args.include_hidden)?;
-            documents.extend(loaded);
         } else {
             eprintln!("Warning: path not found: {}", doc_path);
         }
