@@ -78,6 +78,9 @@ sha2 = "0.10"
 # Progress bars
 indicatif = "0.17"
 
+# PDF extraction
+pdf-extract = "0.10"
+
 # Regex
 regex = "1"
 

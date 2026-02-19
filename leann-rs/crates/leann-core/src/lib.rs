@@ -4,6 +4,7 @@ pub mod bm25;
 pub mod builder;
 pub mod chat;
 pub mod chunking;
+pub mod document_loaders;
 pub mod embedding;
 pub mod hnsw;
 pub mod index;

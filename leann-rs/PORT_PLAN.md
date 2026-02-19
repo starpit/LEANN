@@ -2,7 +2,7 @@
 
 ## Current Status (2026-02-19)
 
-**8,415 lines of Rust across 4 crates. 47 unit tests passing. 0 errors, 0 warnings.**
+**8,500+ lines of Rust across 4 crates. 50 unit tests passing. 0 errors, 0 warnings.**
 
 All 8 phases of the initial implementation are complete. CLI has been aligned with Python CLI options and semantics. What remains is hardening: integration tests, ONNX Runtime activation, Python example porting, and CI setup.
 
@@ -10,7 +10,7 @@ All 8 phases of the initial implementation are complete. CLI has been aligned wi
 
 | Crate | LOC | Status |
 |-------|-----|--------|
-| `leann-core` | 6,561 | Complete - all modules implemented with 47 unit tests |
+| `leann-core` | 6,811 | Complete - all modules implemented with 50 unit tests |
 | `leann-cli` | 1,283 | Complete - all 8 commands wired up, aligned with Python CLI |
 | `leann-server` | 222 | Complete - all endpoints functional with state management |
 | `leann-python` | 349 | Complete - compiles with PyO3 0.25 (needs maturin build test) |
@@ -54,6 +54,9 @@ leann-rs/
         mod.rs                  (73)  # chunk_text with sentence overlap [2 tests]
         sentence.rs            (120)  # Sentence splitter [4 tests]
         ast.rs                 (481)  # Python/Rust/JS/TS code chunking [4 tests]
+      document_loaders/
+        mod.rs                  (67)  # extract_text dispatcher, is_binary_document
+        pdf.rs                  (80)  # PDF text extraction via pdf-extract [3 tests]
     leann-cli/src/
       main.rs                (1,283)  # clap CLI: build/search/ask/react/list/remove/watch/serve
     leann-server/src/
@@ -264,8 +267,9 @@ PyO3 0.25 used for leann-python (standalone crate, Python 3.14 compatible).
 
 ### Document loading [COMPLETE]
 - Recursive directory walker with skip logic (.git, node_modules, target, __pycache__, venv)
-- 30+ supported extensions: txt, md, rst, rs, py, js, jsx, ts, tsx, java, go, c, cpp, cc, cxx, h, hpp, rb, sh, bash, toml, yaml, yml, json, xml, html, htm, css, sql, r, lua, php, swift, kt, scala, ex, exs
-- Note: Binary format support (PDF, PPTX, DOCX) not yet implemented — text-based files only
+- 30+ supported extensions: txt, md, rst, rs, py, js, jsx, ts, tsx, java, go, c, cpp, cc, cxx, h, hpp, rb, sh, bash, toml, yaml, yml, json, xml, html, htm, css, sql, r, lua, php, swift, kt, scala, ex, exs, pdf
+- PDF text extraction via `pdf-extract` crate (behind `pdf` feature flag, enabled by default)
+- `document_loaders` module dispatches between text-based and binary formats automatically
 
 ### Chunking [COMPLETE]
 - Sentence-based chunking with configurable size and overlap
@@ -318,7 +322,7 @@ PyO3 0.25 used for leann-python (standalone crate, Python 3.14 compatible).
 1. **ONNX Runtime activation** — Wire up `ort` crate for local sentence-transformer inference (currently scaffold only)
 2. **Integration tests** — End-to-end: build index from test corpus, search, verify recall
 3. **GeminiChat LLM provider** — Chat backend for Gemini (embedding provider is done)
-4. **PDF document loading** — Add `pdf-extract` or similar crate for binary document support
+4. ~~**PDF document loading**~~ — DONE: `pdf-extract` crate via `document_loaders` module with `pdf` feature flag
 5. **Maturin build test** — Verify PyO3 bindings produce a working Python wheel
 
 ### Medium Priority
@@ -352,7 +356,7 @@ PyO3 0.25 used for leann-python (standalone crate, Python 3.14 compatible).
 
 ## Verification
 
-1. **Unit tests**: 47 passing across leann-core (search_result, settings, index, metadata_filter, passages, bm25, hnsw/*, chunking/*, react_agent, sync). 0 errors, 0 warnings.
+1. **Unit tests**: 50 passing across leann-core (search_result, settings, index, metadata_filter, passages, bm25, hnsw/*, chunking/*, document_loaders/pdf, react_agent, sync). 0 errors, 0 warnings.
 2. **CLI conformance**: Rust CLI options aligned with Python CLI (2026-02-19) — verified via `--help` output comparison
 3. **Integration tests**: Not yet written — build index from test corpus, search, verify recall matches Python version
 4. **Python binding tests**: Not yet written — port tests/test_basic.py, tests/test_metadata_filtering.py, tests/test_hybrid_search.py

@@ -601,9 +601,15 @@ fn cmd_build(args: BuildArgs) -> Result<()> {
     for doc_path in &args.docs {
         let p = Path::new(doc_path);
         if p.is_file() {
-            if let Ok(content) = std::fs::read_to_string(p) {
-                if !content.trim().is_empty() {
+            match leann_core::document_loaders::extract_text(p) {
+                Ok(Some(content)) => {
                     documents.push((p.to_string_lossy().to_string(), content));
+                }
+                Ok(None) => {
+                    eprintln!("Warning: no text extracted from {}", doc_path);
+                }
+                Err(e) => {
+                    eprintln!("Warning: failed to read {}: {}", doc_path, e);
                 }
             }
         } else if p.is_dir() {
@@ -1290,7 +1296,7 @@ fn load_documents(
     let default_extensions = [
         "txt", "md", "rst", "rs", "py", "js", "jsx", "ts", "tsx", "java", "go", "c", "cpp", "cc",
         "cxx", "h", "hpp", "rb", "sh", "bash", "toml", "yaml", "yml", "json", "xml", "html", "htm",
-        "css", "sql", "r", "lua", "php", "swift", "kt", "scala", "ex", "exs",
+        "css", "sql", "r", "lua", "php", "swift", "kt", "scala", "ex", "exs", "pdf",
     ];
 
     let mut documents = Vec::new();
@@ -1308,9 +1314,13 @@ fn load_documents(
         };
 
         if allowed {
-            if let Ok(content) = std::fs::read_to_string(path) {
-                if !content.trim().is_empty() {
+            match leann_core::document_loaders::extract_text(path) {
+                Ok(Some(content)) => {
                     documents.push((path.to_string_lossy().to_string(), content));
+                }
+                Ok(None) => {} // empty or unsupported
+                Err(e) => {
+                    tracing::debug!("Skipping {}: {}", path.display(), e);
                 }
             }
         }
