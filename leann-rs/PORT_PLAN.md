@@ -2,7 +2,7 @@
 
 ## Current Status (2026-02-19)
 
-**8,500+ lines of Rust across 4 crates. 50 unit tests passing. 0 errors, 0 warnings.**
+**8,500+ lines of Rust across 4 crates. 143 tests passing (50 unit + 93 integration). 0 errors, 0 warnings.**
 
 All 8 phases of the initial implementation are complete. CLI has been aligned with Python CLI options and semantics. What remains is hardening: integration tests, ONNX Runtime activation, Python example porting, and CI setup.
 
@@ -316,11 +316,251 @@ PyO3 0.25 used for leann-python (standalone crate, Python 3.14 compatible).
 
 ---
 
+## End-to-End Test Plan
+
+Maps the Python test suite (`tests/test_*.py`) to equivalent Rust integration tests. Tests live in `crates/leann-core/tests/` as Rust integration tests (separate from unit tests in `src/`). All tests that don't require an external embedding service use a `FakeEmbeddingProvider` that returns deterministic vectors (e.g., hash-based or sequential), avoiding any network dependency.
+
+### Test File Layout
+
+```
+crates/leann-core/tests/
+  common/mod.rs              # Shared helpers: FakeEmbeddingProvider, temp_dir, sample docs
+  test_build_search.rs       # Core pipeline: build → search → verify (Python: test_basic.py)
+  test_readme_pipeline.rs    # Full build → search → chat pipeline (Python: test_readme_examples.py)
+  test_hybrid_search.rs      # Vector + BM25 blending via gemma (Python: test_hybrid_search.py)
+  test_metadata_filtering.rs # All 13 operators + compound AND (Python: test_metadata_filtering.py)
+  test_document_loading.rs   # Load txt/md/rs/py/pdf → chunk → build (Python: test_document_rag.py)
+  test_ast_chunking.rs       # AST-aware code chunking integration (Python: test_astchunk_integration.py)
+  test_sync.rs               # Merkle tree + FileSynchronizer e2e (Python: test_sync.py)
+  test_embedding_manager.rs  # Server lifecycle: start/reuse/restart (Python: test_embedding_server_manager.py)
+  test_index_format.rs       # Index file validation + Python format compat (Python: test_diskann_partition.py)
+  test_bm25_search.rs        # Pure BM25 keyword search (subset of test_hybrid_search.py)
+  test_react_agent.rs        # ReAct multi-turn agent with SimulatedChat (Python: test_readme_examples.py)
+
+crates/leann-cli/tests/
+  test_cli_build_search.rs   # CLI subprocess: build + search (Python: test_document_rag.py subprocess tests)
+  test_cli_args.rs           # Argument parsing: ask, verbosity, flags (Python: test_cli_ask.py, test_cli_verbosity.py)
+  test_cli_list_remove.rs    # list + remove commands (no Python equivalent, but needed)
+
+crates/leann-server/tests/
+  test_server_endpoints.rs   # HTTP API: health, indexes, search (no Python equivalent, but needed)
+```
+
+### Shared Test Helpers (`common/mod.rs`)
+
+```rust
+/// Deterministic embedding provider for tests — no network, no model loading.
+/// Maps each text to a unique vector using a simple hash → f32 conversion.
+/// Supports configurable dimensions (default 128).
+pub struct FakeEmbeddingProvider { dimensions: usize }
+
+/// Generate N synthetic documents: "This is document {i} about topic {i % 5}"
+/// with metadata: {"id": "{i}", "doc_num": i, "topic": "topic_{i%5}"}
+pub fn sample_documents(n: usize) -> Vec<(String, serde_json::Value)>
+
+/// Create a temp dir that auto-cleans on drop
+pub fn temp_index_dir() -> tempfile::TempDir
+
+/// Build a test index from sample docs and return (index_path, texts)
+pub fn build_test_index(n_docs: usize, dir: &Path) -> (PathBuf, Vec<String>)
+```
+
+---
+
+### E2E-1: Core Build & Search Pipeline (`test_build_search.rs`)
+**Python source:** `test_basic.py::test_backend_basic`, `test_basic.py::test_large_index`
+
+| Test | What it verifies |
+|------|-----------------|
+| `test_build_and_search_100_docs` | Build HNSW index from 100 synthetic docs with FakeEmbeddingProvider, search with top_k=5, verify: result count == 5, each result has non-empty text, scores are descending, results are SearchResult type |
+| `test_build_and_search_1000_docs` | Same with 1000 docs and top_k=10 — verifies scaling doesn't break |
+| `test_build_creates_expected_files` | After build, verify `.meta.json`, `.passages.jsonl`, `.passages.idx`, `.index` all exist and are non-empty |
+| `test_meta_json_content` | Parse `.meta.json`, verify: backend_name == "hnsw", embedding_model matches, dimensions correct, has passage_sources |
+| `test_search_empty_index` | Build from 0 docs, search → empty results (no crash) |
+| `test_search_returns_relevant_results` | Build from docs with distinct topics, search for topic-specific query, verify top result matches the right topic (using FakeEmbeddingProvider with topic-clustered vectors) |
+| `test_build_with_compact_csr` | Build with compact=true, recompute=true, verify .index is in compact format (smaller than standard) |
+| `test_build_with_distance_metrics` | Build separate indexes with L2, Cosine, MIPS — all three succeed and return results on search |
+| `test_search_top_k_bounds` | top_k=1 returns 1, top_k > n_docs returns n_docs |
+| `test_build_from_precomputed_embeddings` | Use `build_index_from_embeddings` with an Array2<f32>, verify search works |
+
+---
+
+### E2E-2: Full RAG Pipeline — Build → Search → Chat (`test_readme_pipeline.rs`)
+**Python source:** `test_readme_examples.py::test_readme_basic_example`, `test_readme_examples.py::test_llm_config_simulated`
+
+| Test | What it verifies |
+|------|-----------------|
+| `test_build_search_chat_pipeline` | Build index, search for query, create LeannChat with SimulatedChat LLM, call `ask()`, verify non-empty response string |
+| `test_chat_with_simulated_llm` | LeannChat with `LlmConfig { type: "simulated" }`, ask a question, verify response contains simulated text |
+| `test_chat_context_includes_passages` | Verify the LLM receives a prompt that includes retrieved passage text (mock/intercept the LLM call) |
+
+---
+
+### E2E-3: Hybrid Search (`test_hybrid_search.rs`)
+**Python source:** `test_hybrid_search.py`
+
+Uses 10 diverse documents (animals, programming, weather, databases, cooking) with metadata `{"id": "{i}", "doc_num": i}`.
+
+| Test | What it verifies |
+|------|-----------------|
+| `test_pure_vector_search` | `gemma=1.0` — results come from vector search only |
+| `test_pure_keyword_search` | `gemma=0.0` — results come from BM25 only, matching keyword query |
+| `test_hybrid_balanced` | `gemma=0.5` — returns results (non-empty) |
+| `test_hybrid_vector_heavy` | `gemma=0.8` — results skew toward vector |
+| `test_hybrid_keyword_heavy` | `gemma=0.2` — results skew toward BM25 |
+| `test_hybrid_with_metadata_filter` | `gemma=0.5` + metadata filter `{"doc_num": {"<": 8}}` — all results have doc_num < 8 |
+| `test_bm25_scores_keyword_match` | Pure BM25 search for "python programming", verify top results contain those terms |
+
+---
+
+### E2E-4: Metadata Filtering (`test_metadata_filtering.rs`)
+**Python source:** `test_metadata_filtering.py`
+
+Tests `MetadataFilterEngine` at the end-to-end level (applied to real SearchResults from a built index), complementing the existing 7 unit tests.
+
+| Test | What it verifies |
+|------|-----------------|
+| `test_filter_equals` | `{"topic": {"==": "topic_0"}}` — only matching docs returned |
+| `test_filter_not_equals` | `{"topic": {"!=": "topic_0"}}` — topic_0 excluded |
+| `test_filter_less_than` | `{"doc_num": {"<": 5}}` — all results have doc_num < 5 |
+| `test_filter_greater_equal` | `{"doc_num": {">=": 50}}` — all results have doc_num >= 50 |
+| `test_filter_in` | `{"topic": {"in": ["topic_0", "topic_1"]}}` — only those two topics |
+| `test_filter_not_in` | `{"topic": {"not_in": ["topic_0"]}}` — topic_0 excluded |
+| `test_filter_contains` | `{"text": {"contains": "document 1"}}` — substring match |
+| `test_filter_starts_with` | `{"topic": {"starts_with": "topic_"}}` — all pass |
+| `test_filter_ends_with` | `{"topic": {"ends_with": "_0"}}` — only topic_0 |
+| `test_filter_compound_and` | Multiple filters on different fields — AND logic, intersection |
+| `test_filter_range` | `{"doc_num": {">=": 10, "<": 20}}` — range query |
+| `test_filter_no_matches` | Filter that matches nothing → empty results |
+| `test_filter_none_passthrough` | No filters → all results returned unmodified |
+
+---
+
+### E2E-5: Document Loading & Chunking (`test_document_loading.rs`)
+**Python source:** `test_document_rag.py`, `test_astchunk_integration.py`
+
+Uses real small test files created in a temp dir.
+
+| Test | What it verifies |
+|------|-----------------|
+| `test_load_txt_file` | Create a .txt file, extract_text, verify content matches |
+| `test_load_md_file` | Create a .md file, extract_text, verify content |
+| `test_load_rs_file` | Create a .rs file, extract_text, verify content |
+| `test_load_py_file` | Create a .py file, extract_text, verify content |
+| `test_load_pdf_file` | Create a minimal PDF or use a small test PDF, extract_text, verify non-empty |
+| `test_load_unsupported_extension` | .xyz file → error or empty |
+| `test_build_from_directory` | Create temp dir with mixed .txt/.md/.rs files, build index from directory, search, verify results come from all file types |
+| `test_chunk_text_sizes` | Chunk a long document, verify all chunks ≤ max_size, chunk count > 1 |
+| `test_chunk_overlap` | Verify sentence overlap between consecutive chunks |
+| `test_ast_chunk_python` | Python source file → AST chunking → chunks align with function/class boundaries |
+| `test_ast_chunk_rust` | Rust source file → AST chunking → chunks align with fn/impl/struct boundaries |
+| `test_ast_chunk_javascript` | JS source file → AST chunking → chunks align with function/class boundaries |
+| `test_ast_fallback_to_sentence` | Non-code file with AST chunking enabled → falls back to sentence chunking |
+
+---
+
+### E2E-6: File Synchronization (`test_sync.rs`)
+**Python source:** `test_sync.py`
+
+| Test | What it verifies |
+|------|-----------------|
+| `test_merkle_tree_no_changes` | Build tree, compare to self → no changes detected |
+| `test_merkle_tree_detects_added_file` | Add a file → changes detected, lists the added file |
+| `test_merkle_tree_detects_removed_file` | Remove a file → changes detected, lists the removed file |
+| `test_merkle_tree_detects_modified_file` | Modify file contents → changes detected |
+| `test_file_synchronizer_generate_hashes` | `generate_file_hashes()` returns hashes for all files in dir |
+| `test_file_synchronizer_check_for_changes` | Full lifecycle: initial scan → modify → check_for_changes → detects delta |
+
+---
+
+### E2E-7: Embedding Server Lifecycle (`test_embedding_manager.rs`)
+**Python source:** `test_embedding_server_manager.py`
+
+| Test | What it verifies |
+|------|-----------------|
+| `test_server_reuse_same_config` | Start server with config A, request again with same config → reuses (no restart) |
+| `test_server_restart_on_config_change` | Start server, change metadata (passage sources change), request → restarts |
+| `test_server_port_allocation` | Manager allocates a free port (no collision) |
+
+---
+
+### E2E-8: Index File Format Validation (`test_index_format.rs`)
+**Python source:** `test_diskann_partition.py` (file format parts)
+
+| Test | What it verifies |
+|------|-----------------|
+| `test_index_files_exist_after_build` | `.meta.json`, `.passages.jsonl`, `.passages.idx`, `.index` — all created |
+| `test_passages_jsonl_format` | Each line is valid JSON with `text`, `metadata`, and `id` fields |
+| `test_id_map_roundtrip` | Write id_map, read it back → identical |
+| `test_passages_offset_random_access` | Load offset map, access passage by ID → correct text returned |
+| `test_hnsw_index_binary_roundtrip` | Write compact HNSW index, read back → graph structure matches |
+| `test_read_python_pickle_offset_map` | Parse a Python pickle protocol 2 offset map → correct offsets (backward compat) |
+| `test_meta_json_schema` | Verify all required fields present: backend_name, embedding_model, dimensions, passage_sources |
+
+---
+
+### E2E-9: CLI Integration Tests (`test_cli_build_search.rs`, `test_cli_args.rs`, `test_cli_list_remove.rs`)
+**Python source:** `test_ci_minimal.py`, `test_cli_ask.py`, `test_cli_verbosity.py`, `test_document_rag.py`
+
+Tests run the `leann` binary as a subprocess via `std::process::Command`.
+
+| Test | File | What it verifies |
+|------|------|-----------------|
+| `test_cli_help` | args | `leann --help` exits 0, output contains "build", "search", "ask" |
+| `test_cli_build_help` | args | `leann build --help` exits 0, output contains "--docs", "--embedding-model" |
+| `test_cli_search_help` | args | `leann search --help` exits 0, output contains "--complexity" |
+| `test_cli_ask_positional_query` | args | `leann ask my-docs "some query"` parses without error |
+| `test_cli_verbose_quiet_exclusive` | args | `leann -v -q list` fails (mutually exclusive) |
+| `test_cli_list_empty` | list_remove | `leann list` in empty dir → no indexes found message |
+| `test_cli_build_then_search` | build_search | Build from test corpus via CLI, then search via CLI, verify output contains results |
+| `test_cli_build_then_list` | list_remove | Build an index, `leann list` → shows the index name |
+| `test_cli_remove_force` | list_remove | Build index, `leann remove --force <name>` → index gone, `leann list` → empty |
+
+---
+
+### E2E-10: HTTP Server Tests (`test_server_endpoints.rs`)
+**Python source:** None (new for Rust, but validates `leann-server`)
+
+Uses `axum::test` helpers or spawns server on a random port.
+
+| Test | What it verifies |
+|------|-----------------|
+| `test_health_endpoint` | `GET /health` → 200, body has "status": "ok" |
+| `test_indexes_empty` | `GET /indexes` with no indexes → 200, empty list |
+| `test_indexes_after_build` | Build an index, `GET /indexes` → lists it with correct metadata |
+| `test_index_info` | `GET /indexes/{name}` → 200, correct name/model/dimensions |
+| `test_index_not_found` | `GET /indexes/nonexistent` → 404 |
+| `test_search_endpoint` | `POST /indexes/{name}/search` with query → 200, results array |
+
+---
+
+### Test Markers / Categories
+
+```rust
+// In Cargo.toml or via cfg attributes:
+// - Default: all tests that use FakeEmbeddingProvider (no network, fast)
+// - #[ignore] tests that require: external embedding service, live LLM, OpenAI API key
+// - Feature-gated: #[cfg(feature = "pdf")] for PDF tests
+```
+
+| Category | Runs in CI | Needs network | Approximate count |
+|----------|-----------|---------------|-------------------|
+| Core (FakeEmbeddingProvider) | Yes | No | ~45 |
+| CLI subprocess | Yes | No | ~9 |
+| HTTP server | Yes | No | ~6 |
+| PDF loading | Yes (with `pdf` feature) | No | ~2 |
+| OpenAI embedding | No (`#[ignore]`) | Yes | ~3 |
+| Ollama embedding | No (`#[ignore]`) | Yes | ~2 |
+| Format compat (Python indexes) | Yes | No | ~3 |
+| **Total** | | | **~70** |
+
+---
+
 ## Remaining Work
 
 ### High Priority
 1. **ONNX Runtime activation** — Wire up `ort` crate for local sentence-transformer inference (currently scaffold only)
-2. **Integration tests** — End-to-end: build index from test corpus, search, verify recall
+2. **End-to-end tests** — ~70 integration tests as detailed in the End-to-End Test Plan above
 3. **GeminiChat LLM provider** — Chat backend for Gemini (embedding provider is done)
 4. ~~**PDF document loading**~~ — DONE: `pdf-extract` crate via `document_loaders` module with `pdf` feature flag
 5. **Maturin build test** — Verify PyO3 bindings produce a working Python wheel
@@ -358,7 +598,7 @@ PyO3 0.25 used for leann-python (standalone crate, Python 3.14 compatible).
 
 1. **Unit tests**: 50 passing across leann-core (search_result, settings, index, metadata_filter, passages, bm25, hnsw/*, chunking/*, document_loaders/pdf, react_agent, sync). 0 errors, 0 warnings.
 2. **CLI conformance**: Rust CLI options aligned with Python CLI (2026-02-19) — verified via `--help` output comparison
-3. **Integration tests**: Not yet written — build index from test corpus, search, verify recall matches Python version
+3. **End-to-end tests**: 93 integration tests passing across 9 test files (see End-to-End Test Plan above). Coverage: core build/search pipeline (13 tests), BM25 keyword search (8 tests), hybrid/grep search via LeannSearcher (7 tests), metadata filtering with all 13 operators (18 tests), document loading + AST chunking (17 tests), file sync/Merkle tree (7 tests), index file format validation (7 tests), chat/LLM pipeline (5 tests), CLI subprocess/help tests (7 tests), HTTP server endpoints (4 tests). All use FakeEmbeddingProvider for deterministic, network-free execution.
 4. **Python binding tests**: Not yet written — port tests/test_basic.py, tests/test_metadata_filtering.py, tests/test_hybrid_search.py
 5. **Benchmark**: Not yet run — compare search latency and index build time against current Python+FAISS
 6. **Format compatibility**: Not yet tested — reading indexes built by Python version
