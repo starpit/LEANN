@@ -145,6 +145,9 @@ fn main() {
     let num_threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
+    let hnsw_seed: Option<u64> = std::env::var("HNSW_SEED")
+        .ok()
+        .and_then(|s| s.parse().ok());
     let mut results: BTreeMap<String, BenchResult> = BTreeMap::new();
 
     // Create one thread pool, reused across all parallel builds.
@@ -154,6 +157,9 @@ fn main() {
         .unwrap();
 
     eprintln!("Using {num_threads} threads for parallel builds");
+    if let Some(seed) = hnsw_seed {
+        eprintln!("HNSW_SEED={seed}");
+    }
 
     eprintln!("=== LEANN Rust HNSW Benchmarks (JSON output) ===");
 
@@ -205,6 +211,7 @@ fn main() {
         distance_metric: leann_core::index::DistanceMetric::L2,
         is_compact: false,
         is_recompute: false,
+        seed: hnsw_seed,
     };
 
     let build_sizes: Vec<usize> = if skip_large {

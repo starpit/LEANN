@@ -55,6 +55,7 @@ fn bench_hnsw_build(c: &mut Criterion) {
         distance_metric: leann_core::index::DistanceMetric::L2,
         is_compact: false,
         is_recompute: false,
+        seed: None,
     };
 
     for n in [100, 1_000, 10_000, 50_000] {
@@ -89,6 +90,7 @@ fn bench_hnsw_search(c: &mut Criterion) {
         distance_metric: leann_core::index::DistanceMetric::L2,
         is_compact: false,
         is_recompute: false,
+        seed: None,
     };
 
     let graph = build_hnsw(&data, &config).unwrap();
@@ -128,6 +130,7 @@ fn bench_hnsw_search_recompute(c: &mut Criterion) {
         distance_metric: leann_core::index::DistanceMetric::L2,
         is_compact: false,
         is_recompute: true,
+        seed: None,
     };
 
     let graph = build_hnsw(&data, &config).unwrap();
@@ -187,6 +190,7 @@ fn bench_full_pipeline(c: &mut Criterion) {
         distance_metric: leann_core::index::DistanceMetric::L2,
         is_compact: false,
         is_recompute: false,
+        seed: None,
     };
 
     for n in [100, 1_000, 10_000] {

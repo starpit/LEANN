@@ -1,6 +1,7 @@
 use anyhow::Result;
 use ndarray::Array2;
-use rand::Rng;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use std::sync::atomic::{AtomicI32, Ordering as AtomicOrdering};
 
 use rayon::prelude::*;
@@ -91,8 +92,8 @@ where
     let m = config.m;
     let ml = 1.0 / (m as f64).ln();
 
-    // Assign levels
-    let mut rng = rand::thread_rng();
+    // Assign levels — seed from config, or default deterministic seed
+    let mut rng = StdRng::seed_from_u64(config.seed.unwrap_or(42));
     let mut levels = Vec::with_capacity(n);
     let mut max_level: i32 = 0;
 
@@ -401,8 +402,8 @@ where
     // Safety: flat lives until after pool.install() returns.
     let flat_addr = flat.as_ptr() as usize;
 
-    // Assign levels (sequential, fast)
-    let mut rng = rand::thread_rng();
+    // Assign levels — seed from config, or default deterministic seed
+    let mut rng = StdRng::seed_from_u64(config.seed.unwrap_or(42));
     let mut levels = Vec::with_capacity(n);
     let mut max_level: i32 = 0;
 
@@ -980,6 +981,7 @@ mod tests {
             distance_metric: DistanceMetric::L2,
             is_compact: false,
             is_recompute: false,
+            seed: None,
         };
 
         let graph = build_hnsw(&data, &config).unwrap();
@@ -1006,6 +1008,7 @@ mod tests {
             distance_metric: DistanceMetric::L2,
             is_compact: false,
             is_recompute: false,
+            seed: None,
         };
 
         let graph = build_hnsw_with_threads(&data, &config, 2).unwrap();
@@ -1038,6 +1041,7 @@ mod tests {
             distance_metric: DistanceMetric::L2,
             is_compact: false,
             is_recompute: false,
+            seed: None,
         };
 
         let graph = build_hnsw_with_threads(&data, &config, 4).unwrap();

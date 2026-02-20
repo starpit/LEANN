@@ -16,6 +16,9 @@ pub struct HnswConfig {
     pub is_compact: bool,
     /// Whether the index uses embedding recomputation (pruned storage).
     pub is_recompute: bool,
+    /// Optional seed for deterministic level assignment. `None` uses a default.
+    #[serde(default)]
+    pub seed: Option<u64>,
 }
 
 impl Default for HnswConfig {
@@ -27,6 +30,7 @@ impl Default for HnswConfig {
             distance_metric: DistanceMetric::Mips,
             is_compact: true,
             is_recompute: true,
+            seed: None,
         }
     }
 }

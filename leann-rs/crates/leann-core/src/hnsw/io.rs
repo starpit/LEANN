@@ -152,6 +152,7 @@ pub fn read_hnsw_index<R: Read + Seek>(reader: &mut R) -> Result<HnswGraph> {
             },
             is_compact: true,
             is_recompute: matches!(vector_storage, VectorStorage::Null),
+            seed: None,
         };
 
         Ok(HnswGraph {
@@ -225,6 +226,7 @@ pub fn read_hnsw_index<R: Read + Seek>(reader: &mut R) -> Result<HnswGraph> {
             },
             is_compact: false,
             is_recompute: matches!(vector_storage, VectorStorage::Null),
+            seed: None,
         };
 
         Ok(HnswGraph {
@@ -374,6 +376,7 @@ mod tests {
                 distance_metric: crate::index::DistanceMetric::Mips,
                 is_compact: true,
                 is_recompute: true,
+                seed: None,
             },
             metric_type: 1,
             metric_arg: 0.0,

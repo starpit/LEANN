@@ -129,6 +129,7 @@ mod tests {
             distance_metric: crate::index::DistanceMetric::L2,
             is_compact: false,
             is_recompute: false,
+            seed: None,
         };
 
         let graph = build_hnsw(&data, &config).unwrap();
