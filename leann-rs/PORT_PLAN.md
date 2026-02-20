@@ -1,18 +1,20 @@
 # LEANN Rust Port Plan
 
-## Current Status (2026-02-19)
+## Current Status (2026-02-20)
 
-**8,500+ lines of Rust across 4 crates. 143 tests passing (50 unit + 93 integration). 0 errors, 0 warnings.**
+**11,300+ lines of Rust across 4 crates. 157 tests passing (64 unit + 82 integration + 11 CLI/server). 0 errors, 0 warnings.**
 
-All 8 phases of the initial implementation are complete. CLI has been aligned with Python CLI options and semantics. Criterion benchmark suite added for performance validation against Python FAISS. What remains is hardening: integration tests, ONNX Runtime activation, Python example porting, and CI setup.
+All 8 phases of the initial implementation are complete. Since then, major HNSW performance work has been done: SIMD-optimized distance functions (NEON/AVX2), batch-4 distance computation, parallel build with rayon thread pools, flat heaps for cache locality, early termination, and a `VisitedList` with generation-counter reset. The pure-Rust HNSW engine now matches or approaches FAISS C++ performance. Criterion benchmark suite and Rust-vs-Python comparison scripts validate this.
+
+What remains is hardening: ONNX Runtime activation, Python example porting, CI setup, and remaining integration test gaps.
 
 ### Crate Status
 
 | Crate | LOC | Status |
 |-------|-----|--------|
-| `leann-core` | 6,811 | Complete - all modules implemented with 50 unit tests |
-| `leann-cli` | 1,283 | Complete - all 8 commands wired up, aligned with Python CLI |
-| `leann-server` | 222 | Complete - all endpoints functional with state management |
+| `leann-core` | 8,959 | Complete - all modules implemented with 64 unit tests; extensive HNSW optimization |
+| `leann-cli` | 1,406 | Complete - all 8 commands wired up, aligned with Python CLI |
+| `leann-server` | 420 | Complete - all endpoints functional with state management |
 | `leann-python` | 349 | Complete - compiles with PyO3 0.25 (needs maturin build test) |
 
 ### File Inventory
@@ -22,32 +24,33 @@ leann-rs/
   Cargo.toml                         # workspace root
   crates/
     leann-core/benches/
-      hnsw_benchmarks.rs       (193)  # Criterion benchmarks: distance, build, search, recompute, pipeline
-      bench_json_output.rs     (205)  # Standalone JSON output benchmark binary
+      hnsw_benchmarks.rs       (236)  # Criterion benchmarks: distance, build, search, recompute, pipeline
+      bench_json_output.rs     (396)  # Standalone JSON output benchmark (quantiles, RNG seed, build+search)
     leann-core/src/
-      lib.rs                    (22)  # Module declarations + re-exports
+      lib.rs                    (24)  # Module declarations + re-exports
       search_result.rs          (72)  # SearchResult struct [3 tests]
-      settings.rs              (153)  # Env var resolution [4 tests]
-      index.rs                 (258)  # IndexMeta, IndexPaths, DistanceMetric [5 tests]
-      metadata_filter.rs       (393)  # 13 operators, AND logic [7 tests]
-      passages.rs              (633)  # PassageManager, JSONL I/O, pickle parser [3 tests]
+      settings.rs              (150)  # Env var resolution [4 tests]
+      index.rs                 (252)  # IndexMeta, IndexPaths, DistanceMetric [5 tests]
+      metadata_filter.rs       (387)  # 13 operators, AND logic [7 tests]
+      passages.rs              (626)  # PassageManager, JSONL I/O, pickle parser [3 tests]
       bm25.rs                  (202)  # BM25Scorer [4 tests]
-      builder.rs               (332)  # LeannBuilder (build + from_embeddings)
-      searcher.rs              (337)  # LeannSearcher (vector/BM25/grep/hybrid search)
-      chat.rs                  (268)  # LlmProvider trait + Ollama/OpenAI/Anthropic/Simulated
-      react_agent.rs           (240)  # ReAct agent [2 tests]
-      sync.rs                  (283)  # MerkleTree + FileSynchronizer [2 tests]
+      builder.rs               (380)  # LeannBuilder (build + from_embeddings)
+      searcher.rs              (339)  # LeannSearcher (vector/BM25/grep/hybrid search)
+      chat.rs                  (274)  # LlmProvider trait + Ollama/OpenAI/Anthropic/Simulated
+      react_agent.rs           (246)  # ReAct agent [2 tests]
+      sync.rs                  (279)  # MerkleTree + FileSynchronizer [2 tests]
       hnsw/
-        mod.rs                   (7)
-        graph.rs               (184)  # HnswGraph, GraphStorage, VectorStorage [2 tests]
-        build.rs               (410)  # FAISS-style HNSW insert algorithm [1 test]
-        search.rs              (490)  # Beam search + recompute callback [2 tests]
-        csr.rs                 (153)  # CSR conversion + embedding pruning [1 test]
-        io.rs                  (402)  # Binary format read/write (compact + standard) [1 test]
+        mod.rs                   (9)
+        graph.rs               (190)  # HnswGraph, GraphStorage, VectorStorage [2 tests]
+        simd.rs              (1,018)  # NEON/AVX2 SIMD distance (L2, IP), batch-4, FlatMinHeap/FlatMaxHeap, VisitedList [11 tests]
+        build.rs             (1,053)  # Parallel HNSW build (rayon), early termination, monomorphized distance [3 tests]
+        search.rs              (770)  # Beam search + recompute, SIMD batch-4 distance, flat heaps [2 tests]
+        csr.rs                 (150)  # CSR conversion + embedding pruning [1 test]
+        io.rs                  (408)  # Binary format read/write (compact + standard) [1 test]
       embedding/
         mod.rs                  (54)  # EmbeddingProvider trait, EmbeddingMode enum
-        client.rs              (150)  # ZMQ REQ client (text/distance/by-id)
-        server.rs              (237)  # ZMQ REP server (3 request types)
+        client.rs              (161)  # ZMQ REQ client (text/distance/by-id)
+        server.rs              (225)  # ZMQ REP server (3 request types)
         manager.rs             (215)  # Subprocess lifecycle, port allocation
         openai.rs              (107)  # OpenAI embedding API
         ollama.rs              (259)  # Ollama embedding API (pipelined async)
@@ -56,14 +59,14 @@ leann-rs/
       chunking/
         mod.rs                  (73)  # chunk_text with sentence overlap [2 tests]
         sentence.rs            (120)  # Sentence splitter [4 tests]
-        ast.rs                 (481)  # Python/Rust/JS/TS code chunking [4 tests]
+        ast.rs                 (495)  # Python/Rust/JS/TS code chunking [4 tests]
       document_loaders/
         mod.rs                  (67)  # extract_text dispatcher, is_binary_document
         pdf.rs                  (80)  # PDF text extraction via pdf-extract [3 tests]
     leann-cli/src/
-      main.rs                (1,283)  # clap CLI: build/search/ask/react/list/remove/watch/serve
+      main.rs                (1,406)  # clap CLI: build/search/ask/react/list/remove/watch/serve
     leann-server/src/
-      main.rs                  (222)  # Axum server: health/indexes/search/info endpoints
+      main.rs                  (420)  # Axum server: health/indexes/search/info endpoints
     leann-python/
       Cargo.toml                      # Standalone (excluded from workspace, built via maturin)
       pyproject.toml                  # maturin config
@@ -121,7 +124,7 @@ PyO3 0.25 used for leann-python (standalone crate, Python 3.14 compatible).
 
 ---
 
-## Phase 2: HNSW Graph Engine (Pure Rust) [COMPLETE]
+## Phase 2: HNSW Graph Engine (Pure Rust) [COMPLETE + OPTIMIZED]
 
 ### 2a. HNSW Data Structures (`hnsw/graph.rs`) [COMPLETE]
 - `HnswGraph` with `GraphStorage` enum: Standard (offsets/neighbors) and Compact (level_ptr/node_offsets/neighbors)
@@ -129,14 +132,30 @@ PyO3 0.25 used for leann-python (standalone crate, Python 3.14 compatible).
 - `HnswConfig`: M, efConstruction, efSearch, distance metric, compact/recompute flags
 - FourCC constants: `FOURCC_HNSW_FLAT = "IHNf"`, `FOURCC_NULL = "null"`
 
-### 2b. HNSW Build (`hnsw/build.rs`) [COMPLETE]
+### 2b. SIMD Distance Functions (`hnsw/simd.rs`) [COMPLETE]
+- **Platform-specific SIMD**: NEON (aarch64) and AVX2 (x86_64) implementations with scalar fallback
+- **L2 distance**: `l2_distance(a, b)` and `l2_distance_batch_4(query, db0, db1, db2, db3)` — query loaded once, reused against 4 database vectors
+- **Inner product distance**: `inner_product_distance(a, b)` and `inner_product_distance_batch_4`
+- **L2 normalization**: `normalize_l2` for cosine distance support
+- **FlatMinHeap / FlatMaxHeap**: Cache-friendly flat-array heaps replacing `BinaryHeap` for better SIMD performance in search/build hot loops
+- **VisitedList**: Generation-counter visited set for O(1) reset between searches (avoids `HashSet` allocation)
+- 11 tests: L2, IP, batch-4, non-aligned, large vectors, normalization, visited list operations
+
+### 2c. HNSW Build (`hnsw/build.rs`) [COMPLETE + OPTIMIZED]
 - FAISS-style `IndexHNSW::add`: exponential level assignment, greedy insert, bidirectional neighbor connections
+- **Parallel build**: `build_hnsw_with_pool` using rayon `ThreadPool` with configurable thread count
+- **Monomorphized distance**: Distance functions use generics (not function pointers) for full inlining
+- **Early termination**: Stops neighbor search when improvement is unlikely
+- **RNG seed support**: Deterministic builds via configurable seed
 - Worst-neighbor eviction when neighbor count exceeds M
 - MIPS, L2, and Cosine distance metrics
-- 1 test: small graph build + verify structure
+- 3 tests: small graph build, parallel small graph, parallel larger graph
 
-### 2c. HNSW Search with Recompute (`hnsw/search.rs`) [COMPLETE]
+### 2d. HNSW Search with Recompute (`hnsw/search.rs`) [COMPLETE + OPTIMIZED]
 - Two-phase beam search: top-down greedy from max level, ef-search at level 0
+- **SIMD batch-4 distance**: Processes 4 neighbor candidates at once using batch distance functions
+- **Flat heaps**: Uses `FlatMinHeap`/`FlatMaxHeap` for cache-friendly candidate management
+- **VisitedList**: Generation-counter visited tracking (O(1) reset instead of HashSet realloc)
 - `search_hnsw` (stored vectors) and `search_hnsw_recompute` (callback-based distance computation)
 - `SearchParams`: ef_search, beam_size, prune_ratio, pruning_strategy, batch_size
 - `PruningStrategy` enum: Global, Local, Proportional
@@ -326,27 +345,26 @@ Maps the Python test suite (`tests/test_*.py`) to equivalent Rust integration te
 ### Test File Layout
 
 ```
-crates/leann-core/tests/
-  common/mod.rs              # Shared helpers: FakeEmbeddingProvider, temp_dir, sample docs
-  test_build_search.rs       # Core pipeline: build → search → verify (Python: test_basic.py)
-  test_readme_pipeline.rs    # Full build → search → chat pipeline (Python: test_readme_examples.py)
-  test_hybrid_search.rs      # Vector + BM25 blending via gemma (Python: test_hybrid_search.py)
-  test_metadata_filtering.rs # All 13 operators + compound AND (Python: test_metadata_filtering.py)
-  test_document_loading.rs   # Load txt/md/rs/py/pdf → chunk → build (Python: test_document_rag.py)
-  test_ast_chunking.rs       # AST-aware code chunking integration (Python: test_astchunk_integration.py)
-  test_sync.rs               # Merkle tree + FileSynchronizer e2e (Python: test_sync.py)
-  test_embedding_manager.rs  # Server lifecycle: start/reuse/restart (Python: test_embedding_server_manager.py)
-  test_index_format.rs       # Index file validation + Python format compat (Python: test_diskann_partition.py)
-  test_bm25_search.rs        # Pure BM25 keyword search (subset of test_hybrid_search.py)
-  test_react_agent.rs        # ReAct multi-turn agent with SimulatedChat (Python: test_readme_examples.py)
+crates/leann-core/tests/         # 82 integration tests
+  common/mod.rs              # ✅ Shared helpers: FakeEmbeddingProvider, temp_dir, sample docs
+  test_build_search.rs       # ✅ 13 tests — Core pipeline: build → search → verify
+  test_chat_pipeline.rs      # ✅ 5 tests — Build → search → chat with SimulatedChat
+  test_hybrid_search.rs      # ✅ 7 tests — Vector + BM25 blending via gemma + grep search
+  test_metadata_filtering.rs # ✅ 18 tests — All 13 operators + compound AND
+  test_document_loading.rs   # ✅ 17 tests — Load txt/md/rs/py → chunk → AST chunking
+  test_sync.rs               # ✅ 7 tests — Merkle tree + FileSynchronizer e2e
+  test_index_format.rs       # ✅ 7 tests — Index file validation + format roundtrips
+  test_bm25_search.rs        # ✅ 8 tests — Pure BM25 keyword search
+  (planned) test_embedding_manager.rs  # Server lifecycle: start/reuse/restart
+  (planned) test_react_agent.rs        # ReAct multi-turn agent with SimulatedChat
 
-crates/leann-cli/tests/
-  test_cli_build_search.rs   # CLI subprocess: build + search (Python: test_document_rag.py subprocess tests)
-  test_cli_args.rs           # Argument parsing: ask, verbosity, flags (Python: test_cli_ask.py, test_cli_verbosity.py)
-  test_cli_list_remove.rs    # list + remove commands (no Python equivalent, but needed)
+crates/leann-cli/tests/          # 7 tests
+  test_cli_args.rs           # ✅ 7 tests — Help output, version, argument parsing
+  (planned) test_cli_build_search.rs   # CLI subprocess: build + search e2e
+  (planned) test_cli_list_remove.rs    # list + remove commands
 
-crates/leann-server/tests/
-  test_server_endpoints.rs   # HTTP API: health, indexes, search (no Python equivalent, but needed)
+crates/leann-server/tests/       # 4 tests
+  test_server_endpoints.rs   # ✅ 4 tests — health, indexes, not_found, index info
 ```
 
 ### Shared Test Helpers (`common/mod.rs`)
@@ -546,16 +564,16 @@ Uses `axum::test` helpers or spawns server on a random port.
 // - Feature-gated: #[cfg(feature = "pdf")] for PDF tests
 ```
 
-| Category | Runs in CI | Needs network | Approximate count |
-|----------|-----------|---------------|-------------------|
-| Core (FakeEmbeddingProvider) | Yes | No | ~45 |
-| CLI subprocess | Yes | No | ~9 |
-| HTTP server | Yes | No | ~6 |
-| PDF loading | Yes (with `pdf` feature) | No | ~2 |
-| OpenAI embedding | No (`#[ignore]`) | Yes | ~3 |
-| Ollama embedding | No (`#[ignore]`) | Yes | ~2 |
-| Format compat (Python indexes) | Yes | No | ~3 |
-| **Total** | | | **~70** |
+| Category | Runs in CI | Needs network | Actual count |
+|----------|-----------|---------------|--------------|
+| Unit tests (leann-core src/) | Yes | No | 64 |
+| Integration tests (leann-core tests/) | Yes | No | 82 |
+| CLI subprocess tests (leann-cli) | Yes | No | 7 |
+| HTTP server tests (leann-server) | Yes | No | 4 |
+| OpenAI embedding | No (`#[ignore]`) | Yes | 0 (planned) |
+| Ollama embedding | No (`#[ignore]`) | Yes | 0 (planned) |
+| Format compat (Python indexes) | Yes | No | 0 (planned) |
+| **Total** | | | **157** |
 
 ---
 
@@ -563,7 +581,7 @@ Uses `axum::test` helpers or spawns server on a random port.
 
 ### High Priority
 1. **ONNX Runtime activation** — Wire up `ort` crate for local sentence-transformer inference (currently scaffold only)
-2. **End-to-end tests** — ~70 integration tests as detailed in the End-to-End Test Plan above
+2. ~~**End-to-end tests**~~ — DONE: 82 integration tests + 11 CLI/server tests (157 total). Remaining gap: CLI build+search subprocess tests, embedding server lifecycle tests, Python format compat tests
 3. **GeminiChat LLM provider** — Chat backend for Gemini (embedding provider is done)
 4. ~~**PDF document loading**~~ — DONE: `pdf-extract` crate via `document_loaders` module with `pdf` feature flag
 5. **Maturin build test** — Verify PyO3 bindings produce a working Python wheel
@@ -578,7 +596,7 @@ Uses `axum::test` helpers or spawns server on a random port.
 ### Low Priority / Deferred
 11. **DiskANN backend** — Deferred per plan; HNSW-only for now
 12. **Format compatibility tests** — Reading indexes built by the Python version
-13. ~~**Recall benchmarks**~~ — DONE: Criterion benchmark suite + Rust vs Python comparison at `benchmarks/` (distance, build, search, recompute, full pipeline, index size)
+13. ~~**Recall benchmarks**~~ — DONE: Criterion benchmark suite + Rust vs Python comparison at `benchmarks/` (distance, build, search, recompute, full pipeline, index size). HNSW performance optimization complete: SIMD (NEON/AVX2), batch-4 distance, parallel build, flat heaps, visited list, early termination.
 14. **MLX embedding provider** — Apple Silicon specific; defer
 15. **HuggingFace chat provider** — Local model inference; defer to ONNX/Ollama
 
@@ -599,10 +617,19 @@ Uses `axum::test` helpers or spawns server on a random port.
 
 ## Verification
 
-1. **Unit tests**: 50 passing across leann-core (search_result, settings, index, metadata_filter, passages, bm25, hnsw/*, chunking/*, document_loaders/pdf, react_agent, sync). 0 errors, 0 warnings.
+1. **Unit tests**: 64 passing across leann-core (search_result, settings, index, metadata_filter, passages, bm25, hnsw/{build, search, graph, csr, io, simd}, chunking/*, document_loaders/pdf, react_agent, sync). 0 errors, 0 warnings.
 2. **CLI conformance**: Rust CLI options aligned with Python CLI (2026-02-19) — verified via `--help` output comparison
-3. **End-to-end tests**: 93 integration tests passing across 9 test files (see End-to-End Test Plan above). Coverage: core build/search pipeline (13 tests), BM25 keyword search (8 tests), hybrid/grep search via LeannSearcher (7 tests), metadata filtering with all 13 operators (18 tests), document loading + AST chunking (17 tests), file sync/Merkle tree (7 tests), index file format validation (7 tests), chat/LLM pipeline (5 tests), CLI subprocess/help tests (7 tests), HTTP server endpoints (4 tests). All use FakeEmbeddingProvider for deterministic, network-free execution.
-4. **Python binding tests**: Not yet written — port tests/test_basic.py, tests/test_metadata_filtering.py, tests/test_hybrid_search.py
-5. **Benchmark**: Criterion benchmark suite implemented (`cargo bench --package leann-core`) with 5 groups: distance computation (SIMD at 128/384/768 dims), HNSW build (100/1K/10K/50K), HNSW search (ef 16-256), HNSW search recompute (ef 16-256), full pipeline (build+write+read+search). JSON output binary for scripted comparison. Python FAISS comparison suite at `benchmarks/` with orchestration script (`benchmarks/compare_rust_python.sh`).
-6. **Format compatibility**: Not yet tested — reading indexes built by Python version
-7. **Cross-platform**: Not yet set up — CI for Linux (x86_64), macOS (ARM64), Windows
+3. **Integration tests**: 82 passing across 8 test files in leann-core. Coverage: core build/search pipeline (13 tests), BM25 keyword search (8 tests), hybrid/grep search via LeannSearcher (7 tests), metadata filtering with all 13 operators (18 tests), document loading + AST chunking (17 tests), file sync/Merkle tree (7 tests), index file format validation (7 tests), chat/LLM pipeline (5 tests). All use FakeEmbeddingProvider for deterministic, network-free execution.
+4. **CLI/server tests**: 11 passing — CLI subprocess/help tests (7 in leann-cli), HTTP server endpoints (4 in leann-server).
+5. **Python binding tests**: Not yet written — port tests/test_basic.py, tests/test_metadata_filtering.py, tests/test_hybrid_search.py
+6. **Benchmark**: Criterion benchmark suite implemented (`cargo bench --package leann-core`) with 5 groups: distance computation (SIMD at 128/384/768 dims), HNSW build (100/1K/10K/50K), HNSW search (ef 16-256), HNSW search recompute (ef 16-256), full pipeline (build+write+read+search). JSON output binary with quantile tracking and RNG seed support for scripted comparison. Python FAISS comparison suite at `benchmarks/` with orchestration script (`benchmarks/compare_rust_python.sh`). See Benchmark Results below for detailed numbers.
+7. **Format compatibility**: Not yet tested — reading indexes built by Python version
+8. **Cross-platform**: Not yet set up — CI for Linux (x86_64), macOS (ARM64), Windows
+
+---
+
+## Benchmark Results
+
+**Geometric mean speedup: 3.41x** vs FAISS C++. Rust faster in 18/23 benchmarks, 5 ties, 0 Python wins. Distance 10-204x faster (SIMD); build 1.4-4.8x faster; search on par; index files 85% smaller.
+
+See **[RUST_PERFORMANCE.md](RUST_PERFORMANCE.md)** for full tables, methodology, and reproduction instructions.

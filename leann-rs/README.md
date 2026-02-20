@@ -17,7 +17,7 @@ LEANN-rs is a full rewrite of the Python LEANN system in Rust, providing:
 
 | Crate | Description |
 |-------|-------------|
-| `leann-core` | Core library: HNSW graph, embeddings, search, builder, passages, BM25, metadata filtering |
+| `leann-core` | Core library: HNSW graph (SIMD-optimized), embeddings, search, builder, passages, BM25, metadata filtering (~9K LOC) |
 | `leann-cli` | CLI binary (`leann build`, `search`, `ask`, `react`, `list`, `remove`, `watch`, `serve`) |
 | `leann-server` | Standalone HTTP server with index management and search endpoints |
 | `leann-python` | PyO3 bindings exposing `LeannBuilder`, `LeannSearcher`, `LeannChat`, `ReActAgent` |
@@ -169,8 +169,9 @@ print(answer)
 
 The core HNSW implementation in `leann-core/src/hnsw/` includes:
 
-- **build.rs** -- FAISS-style insert algorithm with random level assignment, greedy neighbor selection, and bidirectional connections
-- **search.rs** -- Two-phase beam search with support for both stored-vector and recompute modes
+- **simd.rs** -- NEON (aarch64) and AVX2 (x86_64) SIMD-optimized L2 and inner product distance with batch-4 processing, plus `FlatMinHeap`/`FlatMaxHeap` and `VisitedList` data structures
+- **build.rs** -- FAISS-style insert algorithm with parallel construction (rayon), monomorphized distance functions, early termination, and deterministic RNG seed support
+- **search.rs** -- Two-phase beam search with SIMD batch-4 distance, flat heaps, generation-counter visited tracking, and support for both stored-vector and recompute modes
 - **csr.rs** -- Compact CSR format conversion for pruned indexes
 - **io.rs** -- Binary serialization for both standard and compact graph formats
 
@@ -213,53 +214,19 @@ A LEANN index consists of:
 
 ## Benchmarks
 
-Criterion benchmarks for the pure-Rust HNSW engine, plus a comparison suite against the Python FAISS C++ backend.
+The pure-Rust HNSW engine matches or exceeds FAISS C++ performance: **3.4x geometric mean speedup** across 23 benchmarks (distance, build, search, recompute, full pipeline, index size). Distance computations are 10-204x faster via SIMD; search is on par; index files are 85% smaller.
 
-### Criterion benchmarks
+See **[RUST_PERFORMANCE.md](RUST_PERFORMANCE.md)** for full results, methodology, and reproduction instructions.
+
+Quick start:
 
 ```bash
-# Run all Criterion benchmarks (HTML reports in target/criterion/)
+# All-in-one comparison (Rust vs Python/FAISS)
+bash benchmarks/compare_rust_python.sh
+
+# Criterion benchmarks only (HTML reports in target/criterion/)
 cargo bench --package leann-core
-
-# Run a specific benchmark group
-cargo bench --package leann-core -- "distance"
 ```
-
-### Rust vs Python comparison
-
-The quickest way is the all-in-one script (from the repo root):
-
-```bash
-cd /path/to/LEANN && bash benchmarks/compare_rust_python.sh
-
-# Skip 50K-vector benchmarks for faster runs
-SKIP_LARGE=1 bash benchmarks/compare_rust_python.sh
-```
-
-To run each step manually:
-
-```bash
-# 1. Generate Rust results (from leann-rs/)
-mkdir -p ../benchmarks/results
-cargo bench --package leann-core --bench bench_json_output > ../benchmarks/results/rust_results.json
-
-# 2. Generate Python (FAISS C++) results (from repo root)
-cd /path/to/LEANN
-uv run python benchmarks/rust_vs_python.py --json > benchmarks/results/python_results.json
-
-# 3. Compare
-uv run python benchmarks/compare_results.py
-```
-
-### Benchmark groups
-
-| Group | What it measures |
-|-------|-----------------|
-| `distance` | SIMD (NEON/AVX2) L2 and inner product at dims 128, 384, 768 |
-| `hnsw_build` | Graph construction at 100, 1K, 10K, 50K vectors (M=32, efConstruction=200) |
-| `hnsw_search` | Stored-vector search at ef_search 16/32/64/128/256 (10K vectors, top_k=10) |
-| `hnsw_search_recompute` | Recompute-mode search with in-memory callback at same ef values |
-| `full_pipeline` | Build + write + read + search at 100, 1K, 10K vectors |
 
 ## Development
 
