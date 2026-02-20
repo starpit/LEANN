@@ -351,12 +351,16 @@ where
 
             node_buf.push(curr);
             let distances = compute_distance(&node_buf, query);
+            assert!(distances.len() >= node_buf.len());
 
-            let curr_dist = *distances.last().unwrap();
-            let valid_count = node_buf.len() - 1;
-            for i in 0..valid_count {
-                if distances[i] < curr_dist {
-                    curr = node_buf[i];
+            let curr_dist = distances[node_buf.len() - 1];
+            for (&d_nb, &nb) in distances
+                .iter()
+                .zip(node_buf.iter())
+                .take(node_buf.len() - 1)
+            {
+                if d_nb < curr_dist {
+                    curr = nb;
                     changed = true;
                 }
             }
@@ -411,10 +415,10 @@ where
         }
 
         let distances = compute_distance(&node_buf, query);
+        // Trim distances to node_buf length so the compiler knows they match
+        let distances = &distances[..node_buf.len()];
 
-        for (i, &nb) in node_buf.iter().enumerate() {
-            let d_nb = distances[i];
-
+        for (&d_nb, &nb) in distances.iter().zip(node_buf.iter()) {
             if results.len() < ef {
                 candidates.push(SearchCandidate {
                     distance: d_nb,

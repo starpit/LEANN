@@ -626,6 +626,7 @@ fn finalize_graph(
 // Helper functions for neighbor access
 // ---------------------------------------------------------------------------
 
+#[inline(always)]
 fn get_neighbor_range(
     offsets: &[u64],
     cum_nn: &[i32],
@@ -642,6 +643,7 @@ fn get_neighbor_range(
     (offset + begin)..(offset + end)
 }
 
+#[inline(always)]
 fn get_neighbors_mut_slice<'a>(
     neighbors: &'a [i32],
     offsets: &[u64],
@@ -658,6 +660,7 @@ fn get_neighbors_mut_slice<'a>(
 }
 
 /// Read a neighbor slice from atomic storage (parallel path).
+#[inline(always)]
 fn get_neighbors_atomic_slice<'a>(
     neighbors: &'a [AtomicI32],
     offsets: &[u64],
