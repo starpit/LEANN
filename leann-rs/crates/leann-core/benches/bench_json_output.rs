@@ -31,8 +31,8 @@ fn gen_query(rng: &mut StdRng, d: usize) -> Vec<f32> {
 }
 
 /// Run a benchmark: warmup iterations, then `repeats` timed iterations.
-/// Returns (median_secs, mean_secs).
-fn bench_fn<F: FnMut()>(mut f: F, warmup: usize, repeats: usize) -> (f64, f64) {
+/// Returns sorted Vec of elapsed seconds for each iteration.
+fn bench_fn<F: FnMut()>(mut f: F, warmup: usize, repeats: usize) -> Vec<f64> {
     // Warmup
     for _ in 0..warmup {
         f();
@@ -43,38 +43,99 @@ fn bench_fn<F: FnMut()>(mut f: F, warmup: usize, repeats: usize) -> (f64, f64) {
     for _ in 0..repeats {
         let start = Instant::now();
         f();
-        times.push(start.elapsed());
+        times.push(start.elapsed().as_secs_f64());
     }
 
-    times.sort();
-    let median = times[times.len() / 2].as_secs_f64();
-    let mean = times.iter().map(|t| t.as_secs_f64()).sum::<f64>() / times.len() as f64;
-    (median, mean)
+    times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    times
+}
+
+/// Compute a quantile from a sorted slice (linear interpolation).
+fn quantile(sorted: &[f64], q: f64) -> f64 {
+    if sorted.len() == 1 {
+        return sorted[0];
+    }
+    let pos = q * (sorted.len() - 1) as f64;
+    let lo = pos.floor() as usize;
+    let hi = lo + 1;
+    let frac = pos - lo as f64;
+    if hi >= sorted.len() {
+        sorted[lo]
+    } else {
+        sorted[lo] * (1.0 - frac) + sorted[hi] * frac
+    }
 }
 
 #[derive(serde::Serialize)]
 struct BenchResult {
-    median_s: f64,
+    // Quantiles in seconds
+    p5_s: f64,
+    p25_s: f64,
+    p50_s: f64,
+    p75_s: f64,
+    p95_s: f64,
     mean_s: f64,
+    n_iters: usize,
+    // Convenience: median in other units
+    median_s: f64,
     median_ms: f64,
-    mean_ms: f64,
     median_us: f64,
-    mean_us: f64,
     median_ns: f64,
+    mean_ms: f64,
+    mean_us: f64,
     mean_ns: f64,
 }
 
 impl BenchResult {
-    fn from_secs(median: f64, mean: f64) -> Self {
+    fn from_times(times: &[f64]) -> Self {
+        let p5 = quantile(times, 0.05);
+        let p25 = quantile(times, 0.25);
+        let p50 = quantile(times, 0.50);
+        let p75 = quantile(times, 0.75);
+        let p95 = quantile(times, 0.95);
+        let mean = times.iter().sum::<f64>() / times.len() as f64;
         Self {
-            median_s: median,
+            p5_s: p5,
+            p25_s: p25,
+            p50_s: p50,
+            p75_s: p75,
+            p95_s: p95,
             mean_s: mean,
-            median_ms: median * 1e3,
+            n_iters: times.len(),
+            median_s: p50,
+            median_ms: p50 * 1e3,
+            median_us: p50 * 1e6,
+            median_ns: p50 * 1e9,
             mean_ms: mean * 1e3,
-            median_us: median * 1e6,
             mean_us: mean * 1e6,
-            median_ns: median * 1e9,
             mean_ns: mean * 1e9,
+        }
+    }
+
+    /// Scale all time values by a constant (e.g. to convert batched distance to per-call).
+    fn scaled(mut self, factor: f64) -> Self {
+        self.p5_s *= factor;
+        self.p25_s *= factor;
+        self.p50_s *= factor;
+        self.p75_s *= factor;
+        self.p95_s *= factor;
+        self.mean_s *= factor;
+        self.median_s *= factor;
+        self.median_ms *= factor;
+        self.median_us *= factor;
+        self.median_ns *= factor;
+        self.mean_ms *= factor;
+        self.mean_us *= factor;
+        self.mean_ns *= factor;
+        self
+    }
+
+    fn from_size(size: f64) -> Self {
+        Self {
+            p5_s: size, p25_s: size, p50_s: size, p75_s: size, p95_s: size,
+            mean_s: size, n_iters: 1,
+            median_s: size, median_ms: size, median_us: size, median_ns: size,
+            mean_ms: size, mean_us: size, mean_ns: size,
         }
     }
 }
@@ -106,32 +167,32 @@ fn main() {
         let a: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>()).collect();
         let b: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>()).collect();
 
-        let (med, mean) = bench_fn(
+        let times = bench_fn(
             || {
                 for _ in 0..dist_batch {
                     black_box(l2_distance(black_box(&a), black_box(&b)));
                 }
             },
-            100,
-            1_000,
+            200,
+            2_000,
         );
         results.insert(
             format!("distance/l2/{dim}"),
-            BenchResult::from_secs(med / dist_batch as f64, mean / dist_batch as f64),
+            BenchResult::from_times(&times).scaled(1.0 / dist_batch as f64),
         );
 
-        let (med, mean) = bench_fn(
+        let times = bench_fn(
             || {
                 for _ in 0..dist_batch {
                     black_box(inner_product_distance(black_box(&a), black_box(&b)));
                 }
             },
-            100,
-            1_000,
+            200,
+            2_000,
         );
         results.insert(
             format!("distance/ip/{dim}"),
-            BenchResult::from_secs(med / dist_batch as f64, mean / dist_batch as f64),
+            BenchResult::from_times(&times).scaled(1.0 / dist_batch as f64),
         );
     }
 
@@ -158,20 +219,20 @@ fn main() {
         let data = gen_vectors(&mut rng, n, 384);
 
         let repeats = if n >= 50_000 {
-            3
-        } else if n >= 10_000 {
             5
-        } else {
+        } else if n >= 10_000 {
             10
+        } else {
+            20
         };
-        let (med, mean) = bench_fn(
+        let times = bench_fn(
             || {
                 let _ = build_hnsw_with_pool(&data, &config, &pool).unwrap();
             },
             1,
             repeats,
         );
-        results.insert(format!("hnsw_build/{n}"), BenchResult::from_secs(med, mean));
+        results.insert(format!("hnsw_build/{n}"), BenchResult::from_times(&times));
     }
 
     // ── HNSW search (stored vectors) ────────────────────────────────
@@ -195,7 +256,7 @@ fn main() {
                 ef_search: ef,
                 ..Default::default()
             };
-            let (med, mean) = bench_fn(
+            let times = bench_fn(
                 || {
                     let _ = search_hnsw_buf(
                         &graph,
@@ -206,12 +267,12 @@ fn main() {
                         &mut buffers,
                     );
                 },
-                100,
-                1000,
+                200,
+                5000,
             );
             results.insert(
                 format!("hnsw_search/ef{ef}"),
-                BenchResult::from_secs(med, mean),
+                BenchResult::from_times(&times),
             );
         }
     }
@@ -241,7 +302,7 @@ fn main() {
                 ..Default::default()
             };
             let flat_ref = &flat_vectors;
-            let (med, mean) = bench_fn(
+            let times = bench_fn(
                 || {
                     let _ =
                         search_hnsw_recompute(&graph, &query, top_k, &params, |node_ids, q, out| {
@@ -267,12 +328,12 @@ fn main() {
                             }
                         });
                 },
-                100,
-                1000,
+                200,
+                5000,
             );
             results.insert(
                 format!("hnsw_search_recompute/ef{ef}"),
-                BenchResult::from_secs(med, mean),
+                BenchResult::from_times(&times),
             );
         }
     }
@@ -289,8 +350,8 @@ fn main() {
             let data = gen_vectors(&mut rng, n, d);
             let query = gen_query(&mut rng, d);
 
-            let repeats = if n >= 10_000 { 3 } else { 5 };
-            let (med, mean) = bench_fn(
+            let repeats = if n >= 10_000 { 5 } else { 10 };
+            let times = bench_fn(
                 || {
                     let graph = build_hnsw_with_pool(&data, &config, &pool).unwrap();
                     let mut buf = Vec::new();
@@ -309,7 +370,7 @@ fn main() {
             );
             results.insert(
                 format!("full_pipeline/{n}"),
-                BenchResult::from_secs(med, mean),
+                BenchResult::from_times(&times),
             );
 
             // Also measure index size
@@ -318,16 +379,7 @@ fn main() {
             write_hnsw_standard(&mut buf, &graph).unwrap();
             results.insert(
                 format!("index_size_bytes/{n}"),
-                BenchResult {
-                    median_s: buf.len() as f64,
-                    mean_s: buf.len() as f64,
-                    median_ms: buf.len() as f64,
-                    mean_ms: buf.len() as f64,
-                    median_us: buf.len() as f64,
-                    mean_us: buf.len() as f64,
-                    median_ns: buf.len() as f64,
-                    mean_ns: buf.len() as f64,
-                },
+                BenchResult::from_size(buf.len() as f64),
             );
         }
     }
