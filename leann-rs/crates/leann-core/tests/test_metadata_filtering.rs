@@ -342,5 +342,8 @@ fn test_filter_empty_results_list() {
     let empty: Vec<HashMap<String, serde_json::Value>> = vec![];
     let filters = make_filter("chapter", "==", json!(1));
     let filtered = engine.apply_filters(&empty, &filters);
-    assert!(filtered.is_empty(), "Filtering empty list should return empty");
+    assert!(
+        filtered.is_empty(),
+        "Filtering empty list should return empty"
+    );
 }

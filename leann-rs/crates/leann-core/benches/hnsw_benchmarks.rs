@@ -161,8 +161,7 @@ fn bench_hnsw_search_recompute(c: &mut Criterion) {
                         i += 4;
                     }
                     while i < n {
-                        out[i] =
-                            l2_distance(&flat_ref[node_ids[i] * d..(node_ids[i] + 1) * d], q);
+                        out[i] = l2_distance(&flat_ref[node_ids[i] * d..(node_ids[i] + 1) * d], q);
                         i += 1;
                     }
                 })

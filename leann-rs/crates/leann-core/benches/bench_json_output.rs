@@ -132,10 +132,20 @@ impl BenchResult {
 
     fn from_size(size: f64) -> Self {
         Self {
-            p5_s: size, p25_s: size, p50_s: size, p75_s: size, p95_s: size,
-            mean_s: size, n_iters: 1,
-            median_s: size, median_ms: size, median_us: size, median_ns: size,
-            mean_ms: size, mean_us: size, mean_ns: size,
+            p5_s: size,
+            p25_s: size,
+            p50_s: size,
+            p75_s: size,
+            p95_s: size,
+            mean_s: size,
+            n_iters: 1,
+            median_s: size,
+            median_ms: size,
+            median_us: size,
+            median_ns: size,
+            mean_ms: size,
+            mean_us: size,
+            mean_ns: size,
         }
     }
 }
@@ -145,9 +155,7 @@ fn main() {
     let num_threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
-    let hnsw_seed: Option<u64> = std::env::var("HNSW_SEED")
-        .ok()
-        .and_then(|s| s.parse().ok());
+    let hnsw_seed: Option<u64> = std::env::var("HNSW_SEED").ok().and_then(|s| s.parse().ok());
     let mut results: BTreeMap<String, BenchResult> = BTreeMap::new();
 
     // Create one thread pool, reused across all parallel builds.
@@ -311,8 +319,12 @@ fn main() {
             let flat_ref = &flat_vectors;
             let times = bench_fn(
                 || {
-                    let _ =
-                        search_hnsw_recompute(&graph, &query, top_k, &params, |node_ids, q, out| {
+                    let _ = search_hnsw_recompute(
+                        &graph,
+                        &query,
+                        top_k,
+                        &params,
+                        |node_ids, q, out| {
                             let n = node_ids.len();
                             let mut i = 0;
                             while i + 4 <= n {
@@ -333,7 +345,8 @@ fn main() {
                                 );
                                 i += 1;
                             }
-                        });
+                        },
+                    );
                 },
                 200,
                 5000,

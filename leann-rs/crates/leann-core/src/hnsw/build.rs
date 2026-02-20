@@ -234,7 +234,9 @@ where
 
                 // Pass 1: prefetch visited table entries
                 for &nb in nb_slice {
-                    if nb < 0 { break; }
+                    if nb < 0 {
+                        break;
+                    }
                     visited.prefetch(nb as usize);
                 }
 
@@ -281,7 +283,9 @@ where
                 // Process remainder (1-3 leftover neighbors)
                 for k in 0..counter {
                     let nb_id = saved[k];
-                    let d_nb = dist_fn(query_slice, unsafe { get_flat(flat_ptr, nb_id as usize, d) });
+                    let d_nb = dist_fn(query_slice, unsafe {
+                        get_flat(flat_ptr, nb_id as usize, d)
+                    });
                     if results.len() < ef || d_nb < results.peek_max_dis() {
                         candidates.push(d_nb, nb_id);
                         results.push(d_nb, nb_id);
@@ -301,7 +305,14 @@ where
             result_vec.reverse(); // now ascending distance (closest first)
 
             // FAISS-style diversity pruning: select diverse neighbors
-            shrink_neighbor_list(&result_vec, &mut shrink_out, max_neighbors, flat_ptr, d, &dist_fn);
+            shrink_neighbor_list(
+                &result_vec,
+                &mut shrink_out,
+                max_neighbors,
+                flat_ptr,
+                d,
+                &dist_fn,
+            );
 
             // Forward connections: write selected neighbors to node i's slots
             let fwd_range = get_neighbor_range(&offsets, &cum_nneighbor_per_level, i, level);
@@ -463,12 +474,13 @@ where
                     FlatMinHeap::new(ef * 2),
                     FlatMaxHeap::new(ef + 1),
                     Vec::<(f32, u32)>::with_capacity(ef),
-                    Vec::<(f32, u32)>::with_capacity(2 * m),  // shrink_out
-                    Vec::<(f32, u32)>::with_capacity(2 * m + 1),  // link_scratch
-                    Vec::<(f32, u32)>::with_capacity(2 * m),  // link_shrink
+                    Vec::<(f32, u32)>::with_capacity(2 * m), // shrink_out
+                    Vec::<(f32, u32)>::with_capacity(2 * m + 1), // link_scratch
+                    Vec::<(f32, u32)>::with_capacity(2 * m), // link_shrink
                 )
             },
-            |(visited, candidates, results, result_vec, shrink_out, link_scratch, link_shrink), i| {
+            |(visited, candidates, results, result_vec, shrink_out, link_scratch, link_shrink),
+             i| {
                 let flat_ptr = flat_addr as *const f32;
                 let node_level = levels[i] - 1;
 
@@ -477,7 +489,8 @@ where
                 // Phase 1: greedy descent from top level to node_level+1
                 let mut curr_entry = entry_point.load(AtomicOrdering::Relaxed) as usize;
                 for level in (node_level as usize + 1..=max_level as usize).rev() {
-                    let mut d_curr = dist_ref(query_slice, unsafe { get_flat(flat_ptr, curr_entry, d) });
+                    let mut d_curr =
+                        dist_ref(query_slice, unsafe { get_flat(flat_ptr, curr_entry, d) });
                     loop {
                         let mut changed = false;
                         let nb_slice = get_neighbors_atomic_slice(
@@ -518,7 +531,8 @@ where
                     visited.reset();
                     visited.set(i);
 
-                    let d_entry = dist_ref(query_slice, unsafe { get_flat(flat_ptr, curr_entry, d) });
+                    let d_entry =
+                        dist_ref(query_slice, unsafe { get_flat(flat_ptr, curr_entry, d) });
                     candidates.push(d_entry, curr_entry as u32);
                     results.push(d_entry, curr_entry as u32);
                     visited.set(curr_entry);
@@ -542,7 +556,9 @@ where
                         // Pass 1: prefetch visited table entries
                         for atom in nb_slice {
                             let nb = atom.load(AtomicOrdering::Relaxed);
-                            if nb < 0 { break; }
+                            if nb < 0 {
+                                break;
+                            }
                             visited.prefetch(nb as usize);
                         }
 
@@ -589,8 +605,9 @@ where
                         // Process remainder (1-3 leftover neighbors)
                         for k in 0..counter {
                             let nb_id = saved[k];
-                            let d_nb =
-                                dist_ref(query_slice, unsafe { get_flat(flat_ptr, nb_id as usize, d) });
+                            let d_nb = dist_ref(query_slice, unsafe {
+                                get_flat(flat_ptr, nb_id as usize, d)
+                            });
                             if results.len() < ef || d_nb < results.peek_max_dis() {
                                 candidates.push(d_nb, nb_id);
                                 results.push(d_nb, nb_id);
@@ -610,11 +627,17 @@ where
                     result_vec.reverse();
 
                     // FAISS-style diversity pruning
-                    shrink_neighbor_list(result_vec, shrink_out, max_neighbors, flat_ptr, d, dist_ref);
+                    shrink_neighbor_list(
+                        result_vec,
+                        shrink_out,
+                        max_neighbors,
+                        flat_ptr,
+                        d,
+                        dist_ref,
+                    );
 
                     // Forward connections: only this thread writes to node i's slots
-                    let range =
-                        get_neighbor_range(&offsets, &cum_nneighbor_per_level, i, level);
+                    let range = get_neighbor_range(&offsets, &cum_nneighbor_per_level, i, level);
                     for (slot, &(_, id)) in range.zip(shrink_out.iter()) {
                         neighbors[slot].store(id as i32, AtomicOrdering::Relaxed);
                     }
@@ -812,8 +835,9 @@ fn shrink_neighbor_list<D: Fn(&[f32], &[f32]) -> f32>(
         let mut good = true;
         let cand_vec = unsafe { get_flat(flat_ptr, cand_id as usize, dim) };
         for &(_, selected_id) in output.iter() {
-            let dist_to_selected =
-                dist_fn(cand_vec, unsafe { get_flat(flat_ptr, selected_id as usize, dim) });
+            let dist_to_selected = dist_fn(cand_vec, unsafe {
+                get_flat(flat_ptr, selected_id as usize, dim)
+            });
             if dist_to_selected < dist_to_query {
                 good = false;
                 break;
@@ -866,7 +890,9 @@ fn add_link<D: Fn(&[f32], &[f32]) -> f32>(
 
     // Collect all current neighbors + new source into scratch, sorted by distance
     scratch.clear();
-    let source_dist = dist_fn(target_vec, unsafe { get_flat(flat_ptr, source as usize, dim) });
+    let source_dist = dist_fn(target_vec, unsafe {
+        get_flat(flat_ptr, source as usize, dim)
+    });
     scratch.push((source_dist, source as u32));
     for idx in range.clone() {
         let nb = neighbors[idx];
@@ -932,7 +958,9 @@ fn add_link_atomic<D: Fn(&[f32], &[f32]) -> f32>(
 
     // Snapshot current neighbors + source into scratch, sorted by distance
     scratch.clear();
-    let source_dist = dist_fn(target_vec, unsafe { get_flat(flat_ptr, source as usize, dim) });
+    let source_dist = dist_fn(target_vec, unsafe {
+        get_flat(flat_ptr, source as usize, dim)
+    });
     scratch.push((source_dist, source as u32));
     for idx in range.clone() {
         let nb = neighbors[idx].load(AtomicOrdering::Relaxed);

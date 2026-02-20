@@ -371,7 +371,13 @@ unsafe fn inner_product_distance_avx2(a: &[f32], b: &[f32]) -> f32 {
 /// Compute L2 squared distance from one query to 4 database vectors simultaneously.
 /// The query is loaded once and reused, reducing memory bandwidth by 4x for the query.
 #[inline]
-pub fn l2_distance_batch_4(query: &[f32], y0: &[f32], y1: &[f32], y2: &[f32], y3: &[f32]) -> [f32; 4] {
+pub fn l2_distance_batch_4(
+    query: &[f32],
+    y0: &[f32],
+    y1: &[f32],
+    y2: &[f32],
+    y3: &[f32],
+) -> [f32; 4] {
     debug_assert_eq!(query.len(), y0.len());
     debug_assert_eq!(query.len(), y1.len());
     debug_assert_eq!(query.len(), y2.len());
@@ -395,24 +401,40 @@ pub fn l2_distance_batch_4(query: &[f32], y0: &[f32], y1: &[f32], y2: &[f32], y3
 }
 
 #[inline]
-fn l2_distance_batch_4_scalar(query: &[f32], y0: &[f32], y1: &[f32], y2: &[f32], y3: &[f32]) -> [f32; 4] {
+fn l2_distance_batch_4_scalar(
+    query: &[f32],
+    y0: &[f32],
+    y1: &[f32],
+    y2: &[f32],
+    y3: &[f32],
+) -> [f32; 4] {
     let mut d0: f32 = 0.0;
     let mut d1: f32 = 0.0;
     let mut d2: f32 = 0.0;
     let mut d3: f32 = 0.0;
     for i in 0..query.len() {
         let q = query[i];
-        let diff0 = q - y0[i]; d0 += diff0 * diff0;
-        let diff1 = q - y1[i]; d1 += diff1 * diff1;
-        let diff2 = q - y2[i]; d2 += diff2 * diff2;
-        let diff3 = q - y3[i]; d3 += diff3 * diff3;
+        let diff0 = q - y0[i];
+        d0 += diff0 * diff0;
+        let diff1 = q - y1[i];
+        d1 += diff1 * diff1;
+        let diff2 = q - y2[i];
+        d2 += diff2 * diff2;
+        let diff3 = q - y3[i];
+        d3 += diff3 * diff3;
     }
     [d0, d1, d2, d3]
 }
 
 #[cfg(target_arch = "aarch64")]
 #[inline]
-unsafe fn l2_distance_batch_4_neon(query: &[f32], y0: &[f32], y1: &[f32], y2: &[f32], y3: &[f32]) -> [f32; 4] {
+unsafe fn l2_distance_batch_4_neon(
+    query: &[f32],
+    y0: &[f32],
+    y1: &[f32],
+    y2: &[f32],
+    y3: &[f32],
+) -> [f32; 4] {
     use std::arch::aarch64::*;
 
     let n = query.len();
@@ -458,10 +480,14 @@ unsafe fn l2_distance_batch_4_neon(query: &[f32], y0: &[f32], y1: &[f32], y2: &[
     let start = chunks4 * 4;
     for i in start..n {
         let q = *pq.add(i);
-        let d0 = q - *p0.add(i); r0 += d0 * d0;
-        let d1 = q - *p1.add(i); r1 += d1 * d1;
-        let d2 = q - *p2.add(i); r2 += d2 * d2;
-        let d3 = q - *p3.add(i); r3 += d3 * d3;
+        let d0 = q - *p0.add(i);
+        r0 += d0 * d0;
+        let d1 = q - *p1.add(i);
+        r1 += d1 * d1;
+        let d2 = q - *p2.add(i);
+        r2 += d2 * d2;
+        let d3 = q - *p3.add(i);
+        r3 += d3 * d3;
     }
 
     [r0, r1, r2, r3]
@@ -470,7 +496,13 @@ unsafe fn l2_distance_batch_4_neon(query: &[f32], y0: &[f32], y1: &[f32], y2: &[
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
 #[inline]
-unsafe fn l2_distance_batch_4_avx2(query: &[f32], y0: &[f32], y1: &[f32], y2: &[f32], y3: &[f32]) -> [f32; 4] {
+unsafe fn l2_distance_batch_4_avx2(
+    query: &[f32],
+    y0: &[f32],
+    y1: &[f32],
+    y2: &[f32],
+    y3: &[f32],
+) -> [f32; 4] {
     use std::arch::x86_64::*;
 
     let n = query.len();
@@ -529,10 +561,14 @@ unsafe fn l2_distance_batch_4_avx2(query: &[f32], y0: &[f32], y1: &[f32], y2: &[
     let start = chunks8 * 8;
     for i in start..n {
         let q = *pq.add(i);
-        let d0 = q - *p0.add(i); r0 += d0 * d0;
-        let d1 = q - *p1.add(i); r1 += d1 * d1;
-        let d2 = q - *p2.add(i); r2 += d2 * d2;
-        let d3 = q - *p3.add(i); r3 += d3 * d3;
+        let d0 = q - *p0.add(i);
+        r0 += d0 * d0;
+        let d1 = q - *p1.add(i);
+        r1 += d1 * d1;
+        let d2 = q - *p2.add(i);
+        r2 += d2 * d2;
+        let d3 = q - *p3.add(i);
+        r3 += d3 * d3;
     }
 
     [r0, r1, r2, r3]
@@ -542,7 +578,13 @@ unsafe fn l2_distance_batch_4_avx2(query: &[f32], y0: &[f32], y1: &[f32], y2: &[
 
 /// Compute negated inner product distance from one query to 4 database vectors simultaneously.
 #[inline]
-pub fn inner_product_distance_batch_4(query: &[f32], y0: &[f32], y1: &[f32], y2: &[f32], y3: &[f32]) -> [f32; 4] {
+pub fn inner_product_distance_batch_4(
+    query: &[f32],
+    y0: &[f32],
+    y1: &[f32],
+    y2: &[f32],
+    y3: &[f32],
+) -> [f32; 4] {
     debug_assert_eq!(query.len(), y0.len());
     debug_assert_eq!(query.len(), y1.len());
     debug_assert_eq!(query.len(), y2.len());
@@ -566,7 +608,13 @@ pub fn inner_product_distance_batch_4(query: &[f32], y0: &[f32], y1: &[f32], y2:
 }
 
 #[inline]
-fn inner_product_distance_batch_4_scalar(query: &[f32], y0: &[f32], y1: &[f32], y2: &[f32], y3: &[f32]) -> [f32; 4] {
+fn inner_product_distance_batch_4_scalar(
+    query: &[f32],
+    y0: &[f32],
+    y1: &[f32],
+    y2: &[f32],
+    y3: &[f32],
+) -> [f32; 4] {
     let mut d0: f32 = 0.0;
     let mut d1: f32 = 0.0;
     let mut d2: f32 = 0.0;
@@ -583,7 +631,13 @@ fn inner_product_distance_batch_4_scalar(query: &[f32], y0: &[f32], y1: &[f32], 
 
 #[cfg(target_arch = "aarch64")]
 #[inline]
-unsafe fn inner_product_distance_batch_4_neon(query: &[f32], y0: &[f32], y1: &[f32], y2: &[f32], y3: &[f32]) -> [f32; 4] {
+unsafe fn inner_product_distance_batch_4_neon(
+    query: &[f32],
+    y0: &[f32],
+    y1: &[f32],
+    y2: &[f32],
+    y3: &[f32],
+) -> [f32; 4] {
     use std::arch::aarch64::*;
 
     let n = query.len();
@@ -637,7 +691,13 @@ unsafe fn inner_product_distance_batch_4_neon(query: &[f32], y0: &[f32], y1: &[f
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
 #[inline]
-unsafe fn inner_product_distance_batch_4_avx2(query: &[f32], y0: &[f32], y1: &[f32], y2: &[f32], y3: &[f32]) -> [f32; 4] {
+unsafe fn inner_product_distance_batch_4_avx2(
+    query: &[f32],
+    y0: &[f32],
+    y1: &[f32],
+    y2: &[f32],
+    y3: &[f32],
+) -> [f32; 4] {
     use std::arch::x86_64::*;
 
     let n = query.len();
@@ -930,7 +990,9 @@ mod tests {
         for i in 0..4 {
             assert!(
                 (batch[i] - single[i]).abs() / single[i].max(1e-10) < 1e-5,
-                "L2 batch[{i}]: {} vs {}", batch[i], single[i]
+                "L2 batch[{i}]: {} vs {}",
+                batch[i],
+                single[i]
             );
         }
     }
@@ -969,7 +1031,9 @@ mod tests {
         for i in 0..4 {
             assert!(
                 (batch[i] - single[i]).abs() / single[i].abs().max(1e-10) < 1e-5,
-                "IP batch[{i}]: {} vs {}", batch[i], single[i]
+                "IP batch[{i}]: {} vs {}",
+                batch[i],
+                single[i]
             );
         }
     }
