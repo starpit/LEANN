@@ -535,7 +535,6 @@ enum PickleValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
 
     #[test]
     fn test_write_and_read_passages() {
@@ -622,5 +621,243 @@ mod tests {
 
         let loaded = load_id_map(&path).unwrap();
         assert_eq!(loaded, ids);
+    }
+
+    // --- Tests moved from test_index_format.rs ---
+
+    /// Helper: build a test index using FakeEmbeddingProvider (inlined from tests/common).
+    fn build_test_index(
+        n_docs: usize,
+        dir: &std::path::Path,
+        compact: bool,
+        recompute: bool,
+    ) -> Result<std::path::PathBuf> {
+        use crate::embedding::EmbeddingProvider;
+        use crate::index::DistanceMetric;
+
+        struct FakeEmbeddingProvider {
+            dims: usize,
+        }
+        impl FakeEmbeddingProvider {
+            fn new(dims: usize) -> Self {
+                Self { dims }
+            }
+            fn text_to_vector(&self, text: &str) -> Vec<f32> {
+                let bytes = text.as_bytes();
+                let mut vec = vec![0.0f32; self.dims];
+                for (i, &b) in bytes.iter().enumerate() {
+                    vec[i % self.dims] += b as f32 / 255.0;
+                }
+                let norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
+                if norm > 0.0 {
+                    for v in &mut vec {
+                        *v /= norm;
+                    }
+                }
+                vec
+            }
+        }
+        impl EmbeddingProvider for FakeEmbeddingProvider {
+            fn compute_embeddings(&self, chunks: &[String]) -> Result<ndarray::Array2<f32>> {
+                let mut data = Vec::with_capacity(chunks.len() * self.dims);
+                for chunk in chunks {
+                    data.extend(self.text_to_vector(chunk));
+                }
+                Ok(ndarray::Array2::from_shape_vec(
+                    (chunks.len(), self.dims),
+                    data,
+                )?)
+            }
+            fn dimensions(&self) -> usize {
+                self.dims
+            }
+            fn name(&self) -> &str {
+                "fake-test-provider"
+            }
+        }
+
+        let provider = FakeEmbeddingProvider::new(64);
+        let mut builder = crate::builder::LeannBuilder::new("fake-test-model", Some(64), "test");
+        builder = builder
+            .with_m(16)
+            .with_ef_construction(40)
+            .with_compact(compact)
+            .with_recompute(recompute)
+            .with_distance_metric(DistanceMetric::L2);
+
+        for i in 0..n_docs {
+            let topic = format!("topic_{}", i % 5);
+            let text = format!("This is document {} about {}", i, topic);
+            let mut meta = HashMap::new();
+            meta.insert("id".to_string(), serde_json::json!(i.to_string()));
+            meta.insert("doc_num".to_string(), serde_json::json!(i));
+            meta.insert("topic".to_string(), serde_json::json!(topic));
+            builder.add_text(&text, meta);
+        }
+
+        let index_path = dir.join("test_index");
+        builder.build_index(&index_path, &provider)?;
+        Ok(index_path)
+    }
+
+    #[test]
+    fn test_passages_jsonl_format() {
+        use crate::index::IndexPaths;
+        use std::io::BufRead;
+
+        let dir = tempfile::tempdir().unwrap();
+        let index_path = build_test_index(15, dir.path(), true, true).unwrap();
+        let paths = IndexPaths::new(&index_path);
+
+        let file = std::fs::File::open(paths.passages_path()).unwrap();
+        let reader = std::io::BufReader::new(file);
+        let mut count = 0;
+
+        for line in reader.lines() {
+            let line = line.unwrap();
+            let parsed: serde_json::Value = serde_json::from_str(&line)
+                .unwrap_or_else(|e| panic!("Invalid JSON on line {}: {}", count + 1, e));
+
+            assert!(
+                parsed.get("id").is_some(),
+                "Missing 'id' field on line {}",
+                count + 1
+            );
+            assert!(
+                parsed.get("text").is_some(),
+                "Missing 'text' field on line {}",
+                count + 1
+            );
+
+            let text = parsed["text"].as_str().unwrap();
+            assert!(!text.is_empty(), "Empty text on line {}", count + 1);
+
+            count += 1;
+        }
+
+        assert_eq!(count, 15, "Expected 15 passages, got {}", count);
+    }
+
+    #[test]
+    fn test_id_map_roundtrip_50() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.ids.txt");
+
+        let ids: Vec<String> = (0..50).map(|i| format!("doc_{}", i)).collect();
+        write_id_map(&ids, &path).unwrap();
+
+        let loaded = load_id_map(&path).unwrap();
+        assert_eq!(loaded.len(), ids.len());
+        for (a, b) in ids.iter().zip(loaded.iter()) {
+            assert_eq!(a, b);
+        }
+    }
+
+    #[test]
+    fn test_passages_offset_random_access() {
+        let dir = tempfile::tempdir().unwrap();
+        let passages_path = dir.path().join("test.passages.jsonl");
+        let offset_path = dir.path().join("test.passages.idx");
+
+        let passages: Vec<Passage> = (0..20)
+            .map(|i| Passage {
+                id: format!("p_{}", i),
+                text: format!(
+                    "Passage number {} with some content about topic {}",
+                    i,
+                    i % 3
+                ),
+                metadata: {
+                    let mut m = HashMap::new();
+                    m.insert("index".to_string(), serde_json::json!(i));
+                    m
+                },
+            })
+            .collect();
+
+        let offset_map = write_passages(&passages, &passages_path, &offset_path).unwrap();
+        assert_eq!(offset_map.len(), 20);
+
+        let sources = vec![PassageSource {
+            source_type: "jsonl".to_string(),
+            path: passages_path.to_string_lossy().to_string(),
+            index_path: offset_path.to_string_lossy().to_string(),
+            path_relative: None,
+            index_path_relative: None,
+        }];
+
+        let manager = PassageManager::load(&sources, None).unwrap();
+
+        for i in [15, 3, 0, 19, 7, 12] {
+            let p = manager.get_passage(&format!("p_{}", i)).unwrap();
+            assert!(
+                p.text.contains(&format!("Passage number {}", i)),
+                "Wrong passage for p_{}: '{}'",
+                i,
+                p.text
+            );
+        }
+    }
+
+    #[test]
+    fn test_passage_sources_reference_valid_files() {
+        use crate::index::{IndexMeta, IndexPaths};
+
+        let dir = tempfile::tempdir().unwrap();
+        let index_path = build_test_index(10, dir.path(), true, true).unwrap();
+        let paths = IndexPaths::new(&index_path);
+
+        let meta = IndexMeta::load(&paths.meta_path()).unwrap();
+
+        for source in &meta.passage_sources {
+            assert_eq!(source.source_type, "jsonl");
+            assert!(
+                !source.path.is_empty(),
+                "Passage source path should not be empty"
+            );
+        }
+
+        let manager =
+            PassageManager::load(&meta.passage_sources, Some(&paths.meta_path())).unwrap();
+        assert_eq!(manager.len(), 10);
+    }
+
+    // --- Tests moved from test_build_search.rs ---
+
+    #[test]
+    fn test_id_map_roundtrip_after_build() {
+        use crate::index::IndexPaths;
+
+        let dir = tempfile::tempdir().unwrap();
+        let index_path = build_test_index(25, dir.path(), true, true).unwrap();
+        let paths = IndexPaths::new(&index_path);
+
+        let ids = load_id_map(&paths.id_map_path()).unwrap();
+        assert_eq!(ids.len(), 25);
+        for i in 0..25 {
+            assert_eq!(ids[i], i.to_string());
+        }
+    }
+
+    #[test]
+    fn test_passage_random_access_after_build() {
+        use crate::index::{IndexMeta, IndexPaths};
+
+        let dir = tempfile::tempdir().unwrap();
+        let index_path = build_test_index(30, dir.path(), true, true).unwrap();
+        let paths = IndexPaths::new(&index_path);
+
+        let meta = IndexMeta::load(&paths.meta_path()).unwrap();
+        let manager =
+            PassageManager::load(&meta.passage_sources, Some(&paths.meta_path())).unwrap();
+        assert_eq!(manager.len(), 30);
+
+        let p0 = manager.get_passage("0").unwrap();
+        assert!(p0.text.contains("document 0"));
+
+        let p15 = manager.get_passage("15").unwrap();
+        assert!(p15.text.contains("document 15"));
+
+        assert!(manager.get_passage("999").is_err());
     }
 }

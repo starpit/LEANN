@@ -5,7 +5,7 @@
 
 mod common;
 
-use common::{FakeEmbeddingProvider, build_test_index, sample_documents};
+use common::{FakeEmbeddingProvider, build_test_index};
 use leann_core::LeannBuilder;
 use leann_core::embedding::EmbeddingProvider;
 use leann_core::hnsw::build::build_hnsw;
@@ -13,7 +13,6 @@ use leann_core::hnsw::graph::HnswConfig;
 use leann_core::hnsw::io::{read_hnsw_index, write_hnsw_compact, write_hnsw_standard};
 use leann_core::hnsw::search::{SearchParams, search_hnsw};
 use leann_core::index::{DistanceMetric, IndexMeta, IndexPaths};
-use leann_core::passages::{PassageManager, load_id_map};
 use ndarray::Array2;
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -319,42 +318,6 @@ fn test_build_from_precomputed_embeddings() {
     assert_eq!(meta.dimensions, dims);
     assert_eq!(meta.total_passages, Some(n));
     assert_eq!(meta.built_from_precomputed_embeddings, Some(true));
-}
-
-/// ID map roundtrip: write ids, read back, verify.
-#[test]
-fn test_id_map_roundtrip() {
-    let dir = tempfile::tempdir().unwrap();
-    let index_path = build_test_index(25, dir.path(), true, true).unwrap();
-    let paths = IndexPaths::new(&index_path);
-
-    let ids = load_id_map(&paths.id_map_path()).unwrap();
-    assert_eq!(ids.len(), 25);
-    for i in 0..25 {
-        assert_eq!(ids[i], i.to_string());
-    }
-}
-
-/// Passages can be loaded and accessed by ID after build.
-#[test]
-fn test_passage_random_access_after_build() {
-    let dir = tempfile::tempdir().unwrap();
-    let index_path = build_test_index(30, dir.path(), true, true).unwrap();
-    let paths = IndexPaths::new(&index_path);
-
-    let meta = IndexMeta::load(&paths.meta_path()).unwrap();
-    let manager = PassageManager::load(&meta.passage_sources, Some(&paths.meta_path())).unwrap();
-    assert_eq!(manager.len(), 30);
-
-    // Access specific passages
-    let p0 = manager.get_passage("0").unwrap();
-    assert!(p0.text.contains("document 0"));
-
-    let p15 = manager.get_passage("15").unwrap();
-    assert!(p15.text.contains("document 15"));
-
-    // Non-existent passage
-    assert!(manager.get_passage("999").is_err());
 }
 
 /// HNSW index binary roundtrip: write compact, read back, verify structure.

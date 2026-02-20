@@ -10,7 +10,6 @@ use crate::hnsw::graph::HnswGraph;
 use crate::hnsw::io::read_hnsw_index;
 use crate::hnsw::search::{SearchParams, search_hnsw_recompute};
 use crate::index::{DistanceMetric, IndexMeta, IndexPaths};
-use crate::metadata_filter::MetadataFilters;
 use crate::passages::{PassageManager, load_id_map};
 use crate::search_result::SearchResult;
 
@@ -317,7 +316,7 @@ pub struct SearchConfig {
     pub complexity: usize,
     pub beam_width: usize,
     pub prune_ratio: f64,
-    pub metadata_filters: Option<MetadataFilters>,
+    pub metadata_filters: Option<HashMap<String, HashMap<String, serde_json::Value>>>,
     pub batch_size: usize,
     pub use_grep: bool,
     /// Weight of vector search (0.0 = pure BM25, 1.0 = pure vector).

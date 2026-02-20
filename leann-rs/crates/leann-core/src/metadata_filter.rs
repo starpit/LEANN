@@ -253,6 +253,82 @@ mod tests {
         result
     }
 
+    fn make_filter(field: &str, op: &str, value: Value) -> MetadataFilters {
+        let mut filters = MetadataFilters::new();
+        let mut spec = FilterSpec::new();
+        spec.insert(op.to_string(), value);
+        filters.insert(field.to_string(), spec);
+        filters
+    }
+
+    fn sample_results() -> Vec<HashMap<String, Value>> {
+        vec![
+            {
+                let mut m = HashMap::new();
+                m.insert("id".to_string(), json!("doc0"));
+                m.insert("score".to_string(), json!(0.95));
+                m.insert("text".to_string(), json!("A tale of two cities"));
+                m.insert(
+                    "metadata".to_string(),
+                    json!({
+                        "chapter": 1, "genre": "fiction", "word_count": 1500,
+                        "is_published": true, "tags": ["classic", "drama"],
+                        "topic": "topic_0", "doc_num": 0
+                    }),
+                );
+                m
+            },
+            {
+                let mut m = HashMap::new();
+                m.insert("id".to_string(), json!("doc1"));
+                m.insert("score".to_string(), json!(0.85));
+                m.insert("text".to_string(), json!("Data structures and algorithms"));
+                m.insert(
+                    "metadata".to_string(),
+                    json!({
+                        "chapter": 5, "genre": "science", "word_count": 3000,
+                        "is_published": true, "tags": ["textbook"],
+                        "topic": "topic_1", "doc_num": 5
+                    }),
+                );
+                m
+            },
+            {
+                let mut m = HashMap::new();
+                m.insert("id".to_string(), json!("doc2"));
+                m.insert("score".to_string(), json!(0.75));
+                m.insert("text".to_string(), json!("Pride and Prejudice"));
+                m.insert(
+                    "metadata".to_string(),
+                    json!({
+                        "chapter": 3, "genre": "fiction", "word_count": 2000,
+                        "is_published": false, "tags": ["classic", "romance"],
+                        "topic": "topic_0", "doc_num": 12
+                    }),
+                );
+                m
+            },
+            {
+                let mut m = HashMap::new();
+                m.insert("id".to_string(), json!("doc3"));
+                m.insert("score".to_string(), json!(0.65));
+                m.insert(
+                    "text".to_string(),
+                    json!("Introduction to machine learning"),
+                );
+                m.insert(
+                    "metadata".to_string(),
+                    json!({
+                        "chapter": 10, "genre": "science", "word_count": 5000,
+                        "is_published": true, "tags": ["textbook", "ai"],
+                        "topic": "topic_2", "doc_num": 25
+                    }),
+                );
+                m
+            },
+        ]
+    }
+
     #[test]
     fn test_equals_filter() {
         let engine = MetadataFilterEngine::new();
@@ -383,5 +459,256 @@ mod tests {
 
         let filtered = engine.apply_filters(&results, &filters);
         assert_eq!(filtered.len(), 1);
+    }
+
+    // --- Tests from test_metadata_filtering.rs (E2E-4) ---
+
+    #[test]
+    fn test_filter_equals() {
+        let engine = MetadataFilterEngine::new();
+        let dicts = sample_results();
+        let filters = make_filter("genre", "==", json!("fiction"));
+        let filtered = engine.apply_filters(&dicts, &filters);
+        assert_eq!(filtered.len(), 2);
+        for r in &filtered {
+            let genre = r
+                .get("metadata")
+                .unwrap()
+                .get("genre")
+                .unwrap()
+                .as_str()
+                .unwrap();
+            assert_eq!(genre, "fiction");
+        }
+    }
+
+    #[test]
+    fn test_filter_not_equals() {
+        let engine = MetadataFilterEngine::new();
+        let dicts = sample_results();
+        let filters = make_filter("genre", "!=", json!("fiction"));
+        let filtered = engine.apply_filters(&dicts, &filters);
+        assert_eq!(filtered.len(), 2);
+        for r in &filtered {
+            let genre = r
+                .get("metadata")
+                .unwrap()
+                .get("genre")
+                .unwrap()
+                .as_str()
+                .unwrap();
+            assert_ne!(genre, "fiction");
+        }
+    }
+
+    #[test]
+    fn test_filter_less_than() {
+        let engine = MetadataFilterEngine::new();
+        let dicts = sample_results();
+        let filters = make_filter("chapter", "<", json!(5));
+        let filtered = engine.apply_filters(&dicts, &filters);
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn test_filter_less_than_or_equal() {
+        let engine = MetadataFilterEngine::new();
+        let dicts = sample_results();
+        let filters = make_filter("chapter", "<=", json!(5));
+        let filtered = engine.apply_filters(&dicts, &filters);
+        assert_eq!(filtered.len(), 3);
+    }
+
+    #[test]
+    fn test_filter_greater_than() {
+        let engine = MetadataFilterEngine::new();
+        let dicts = sample_results();
+        let filters = make_filter("chapter", ">", json!(5));
+        let filtered = engine.apply_filters(&dicts, &filters);
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn test_filter_greater_equal() {
+        let engine = MetadataFilterEngine::new();
+        let dicts = sample_results();
+        let filters = make_filter("doc_num", ">=", json!(12));
+        let filtered = engine.apply_filters(&dicts, &filters);
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn test_filter_in() {
+        let engine = MetadataFilterEngine::new();
+        let dicts = sample_results();
+        let filters = make_filter("topic", "in", json!(["topic_0", "topic_1"]));
+        let filtered = engine.apply_filters(&dicts, &filters);
+        assert_eq!(filtered.len(), 3);
+    }
+
+    #[test]
+    fn test_filter_not_in() {
+        let engine = MetadataFilterEngine::new();
+        let dicts = sample_results();
+        let filters = make_filter("topic", "not_in", json!(["topic_0"]));
+        let filtered = engine.apply_filters(&dicts, &filters);
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn test_filter_contains() {
+        let engine = MetadataFilterEngine::new();
+        let dicts = sample_results();
+        let filters = make_filter("topic", "contains", json!("_0"));
+        let filtered = engine.apply_filters(&dicts, &filters);
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn test_filter_starts_with() {
+        let engine = MetadataFilterEngine::new();
+        let dicts = sample_results();
+        let filters = make_filter("topic", "starts_with", json!("topic_"));
+        let filtered = engine.apply_filters(&dicts, &filters);
+        assert_eq!(filtered.len(), 4);
+    }
+
+    #[test]
+    fn test_filter_ends_with() {
+        let engine = MetadataFilterEngine::new();
+        let dicts = sample_results();
+        let filters = make_filter("topic", "ends_with", json!("_0"));
+        let filtered = engine.apply_filters(&dicts, &filters);
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn test_filter_is_true() {
+        let engine = MetadataFilterEngine::new();
+        let dicts = sample_results();
+        let filters = make_filter("is_published", "is_true", json!(null));
+        let filtered = engine.apply_filters(&dicts, &filters);
+        assert_eq!(filtered.len(), 3);
+    }
+
+    #[test]
+    fn test_filter_is_false() {
+        let engine = MetadataFilterEngine::new();
+        let dicts = sample_results();
+        let filters = make_filter("is_published", "is_false", json!(null));
+        let filtered = engine.apply_filters(&dicts, &filters);
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn test_filter_compound_and() {
+        let engine = MetadataFilterEngine::new();
+        let dicts = sample_results();
+
+        let mut filters = MetadataFilters::new();
+        let mut genre_spec = FilterSpec::new();
+        genre_spec.insert("==".to_string(), json!("fiction"));
+        filters.insert("genre".to_string(), genre_spec);
+
+        let mut chapter_spec = FilterSpec::new();
+        chapter_spec.insert("<=".to_string(), json!(3));
+        filters.insert("chapter".to_string(), chapter_spec);
+
+        let filtered = engine.apply_filters(&dicts, &filters);
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn test_filter_range() {
+        let engine = MetadataFilterEngine::new();
+        let dicts = sample_results();
+
+        let mut filters = MetadataFilters::new();
+        let mut spec = FilterSpec::new();
+        spec.insert(">=".to_string(), json!(2000));
+        spec.insert("<".to_string(), json!(4000));
+        filters.insert("word_count".to_string(), spec);
+
+        let filtered = engine.apply_filters(&dicts, &filters);
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn test_filter_no_matches() {
+        let engine = MetadataFilterEngine::new();
+        let dicts = sample_results();
+        let filters = make_filter("chapter", "==", json!(999));
+        let filtered = engine.apply_filters(&dicts, &filters);
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn test_filter_none_passthrough() {
+        let engine = MetadataFilterEngine::new();
+        let dicts = sample_results();
+        let filters = MetadataFilters::new();
+        let filtered = engine.apply_filters(&dicts, &filters);
+        assert_eq!(filtered.len(), 4);
+    }
+
+    #[test]
+    fn test_filter_missing_field() {
+        let engine = MetadataFilterEngine::new();
+        let dicts = sample_results();
+        let filters = make_filter("nonexistent_field", "==", json!("value"));
+        let filtered = engine.apply_filters(&dicts, &filters);
+        assert!(filtered.is_empty(), "Missing field should exclude all");
+    }
+
+    #[test]
+    fn test_filter_invalid_operator() {
+        let engine = MetadataFilterEngine::new();
+        let dicts = sample_results();
+        let filters = make_filter("genre", "regex", json!("fic.*"));
+        let filtered = engine.apply_filters(&dicts, &filters);
+        assert!(
+            filtered.is_empty(),
+            "Unknown operator should filter out all items, got {} results",
+            filtered.len()
+        );
+    }
+
+    #[test]
+    fn test_filter_type_coercion() {
+        let engine = MetadataFilterEngine::new();
+
+        let mut results = Vec::new();
+        for (i, val_str) in ["1", "3", "7", "10"].iter().enumerate() {
+            let mut map = HashMap::new();
+            map.insert("id".to_string(), json!(format!("doc{}", i)));
+            map.insert("score".to_string(), json!(0.9));
+            map.insert("text".to_string(), json!("text"));
+            map.insert(
+                "metadata".to_string(),
+                json!({ "priority": val_str.to_string() }),
+            );
+            results.push(map);
+        }
+
+        let filters = make_filter("priority", "<", json!(5));
+        let filtered = engine.apply_filters(&results, &filters);
+        assert_eq!(
+            filtered.len(),
+            2,
+            "String '1' and '3' should pass < 5 via coercion, got {:?}",
+            filtered.iter().map(|r| r.get("id")).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_filter_empty_results_list() {
+        let engine = MetadataFilterEngine::new();
+        let empty: Vec<HashMap<String, Value>> = vec![];
+        let filters = make_filter("chapter", "==", json!(1));
+        let filtered = engine.apply_filters(&empty, &filters);
+        assert!(
+            filtered.is_empty(),
+            "Filtering empty list should return empty"
+        );
     }
 }

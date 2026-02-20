@@ -10,8 +10,6 @@ mod common;
 
 use common::{FakeEmbeddingProvider, build_test_index, diverse_documents};
 use leann_core::LeannBuilder;
-use leann_core::index::IndexPaths;
-use leann_core::metadata_filter::{FilterSpec, MetadataFilters};
 use leann_core::searcher::{LeannSearcher, SearchConfig};
 use std::collections::HashMap;
 
@@ -227,8 +225,8 @@ fn test_bm25_search_with_metadata_filters() {
     // BM25 search for "topic_0" with metadata filter: doc_num < 20
     // topic_0 docs: 0, 5, 10, 15, 20, 25, ..., 95 (20 total)
     // With filter doc_num < 20, only 0, 5, 10, 15 should remain (4 docs)
-    let mut filters = MetadataFilters::new();
-    let mut spec = FilterSpec::new();
+    let mut filters: HashMap<String, HashMap<String, serde_json::Value>> = HashMap::new();
+    let mut spec = HashMap::new();
     spec.insert("<".to_string(), serde_json::json!(20));
     filters.insert("doc_num".to_string(), spec);
 
