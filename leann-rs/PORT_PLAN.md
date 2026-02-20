@@ -1,5 +1,7 @@
 # LEANN Rust Port Plan
 
+> **Rust port currently based on Python commit [`1da64a9`](https://github.com/nickmccarty/LEANN/commit/1da64a9) (`main` as of 2026-02-20).** When updating the Rust code to match future Python changes, diff from this commit forward.
+
 ## Current Status (2026-02-20)
 
 **11,300+ lines of Rust across 4 crates. 157 tests passing (64 unit + 82 integration + 11 CLI/server). 0 errors, 0 warnings.**
