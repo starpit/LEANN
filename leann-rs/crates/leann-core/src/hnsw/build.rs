@@ -1,45 +1,17 @@
 use anyhow::Result;
 use ndarray::Array2;
 use rand::Rng;
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
 use std::sync::atomic::{AtomicI32, Ordering as AtomicOrdering};
 
 use rayon::prelude::*;
 
 use super::graph::*;
-use super::simd::{inner_product_distance, l2_distance, VisitedList};
+use super::search::{FlatMaxHeap, FlatMinHeap};
+use super::simd::{
+    inner_product_distance, inner_product_distance_batch_4, l2_distance, l2_distance_batch_4,
+    VisitedList,
+};
 use crate::index::DistanceMetric;
-
-/// A candidate neighbor during search/build.
-#[derive(Debug, Clone, Copy)]
-struct Candidate {
-    distance: f32,
-    id: usize,
-}
-
-impl PartialEq for Candidate {
-    fn eq(&self, other: &Self) -> bool {
-        self.distance == other.distance && self.id == other.id
-    }
-}
-impl Eq for Candidate {}
-
-impl PartialOrd for Candidate {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Candidate {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // Min-heap: reverse the comparison so smallest distance is popped first
-        other
-            .distance
-            .partial_cmp(&self.distance)
-            .unwrap_or(Ordering::Equal)
-    }
-}
 
 /// Build an HNSW graph from dense vectors (single-threaded).
 pub fn build_hnsw(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGraph> {
@@ -79,20 +51,30 @@ pub fn build_hnsw_with_pool(
 fn build_hnsw_serial(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGraph> {
     // Dispatch on metric to monomorphize — inlines SIMD distance into build loops.
     match config.distance_metric {
-        DistanceMetric::L2 => build_hnsw_serial_inner(data, config, l2_distance),
-        DistanceMetric::Mips | DistanceMetric::Cosine => {
-            build_hnsw_serial_inner(data, config, inner_product_distance)
+        DistanceMetric::L2 => {
+            build_hnsw_serial_inner(data, config, l2_distance, l2_distance_batch_4)
         }
+        DistanceMetric::Mips | DistanceMetric::Cosine => build_hnsw_serial_inner(
+            data,
+            config,
+            inner_product_distance,
+            inner_product_distance_batch_4,
+        ),
     }
 }
 
-/// Monomorphized serial build. The generic `D` parameter lets the compiler
-/// inline the distance function into every call site.
-fn build_hnsw_serial_inner<D: Fn(&[f32], &[f32]) -> f32>(
+/// Monomorphized serial build. The generic `D` and `B` parameters let the
+/// compiler inline the distance functions into every call site.
+fn build_hnsw_serial_inner<D, B>(
     data: &Array2<f32>,
     config: &HnswConfig,
     dist_fn: D,
-) -> Result<HnswGraph> {
+    dist_batch_4: B,
+) -> Result<HnswGraph>
+where
+    D: Fn(&[f32], &[f32]) -> f32,
+    B: Fn(&[f32], &[f32], &[f32], &[f32], &[f32]) -> [f32; 4],
+{
     let n = data.nrows();
     let d = data.ncols();
 
@@ -160,11 +142,13 @@ fn build_hnsw_serial_inner<D: Fn(&[f32], &[f32]) -> f32>(
     // Allocate a single visited list, reused across all levels/nodes
     let mut visited = VisitedList::new(n);
 
-    // Pre-allocate reusable buffers outside the hot loop to avoid repeated alloc/realloc.
-    // ef_construction bounds the result size; candidates can grow larger during search.
+    // Pre-allocate reusable flat heaps (matching FAISS's search_neighbors_to_add)
     let ef = config.ef_construction;
-    let mut candidates = BinaryHeap::with_capacity(ef * 2 * m);
-    let mut result: Vec<Candidate> = Vec::with_capacity(ef);
+    let mut candidates = FlatMinHeap::new(ef * 2 * m);
+    let mut results = FlatMaxHeap::new(ef);
+
+    // Scratch buffer for batching 4 unvisited neighbors
+    let mut saved: [u32; 4] = [0; 4];
 
     for i in 0..n {
         let node_level = levels[i] - 1; // max level for this node
@@ -208,81 +192,116 @@ fn build_hnsw_serial_inner<D: Fn(&[f32], &[f32]) -> f32>(
         }
 
         // Phase 2: For each level from min(node_level, max_level) down to 0,
-        // do greedy search to find ef_construction nearest neighbors, then connect
+        // search for ef_construction nearest neighbors, then connect.
+        // Uses FAISS-style bounded max-heap + batch_4 distance.
         for level in (0..=node_level as usize).rev() {
             let max_neighbors = if level == 0 { 2 * m } else { m };
 
-            // Reuse pre-allocated buffers (clear is O(1) for len, keeps capacity)
+            // Reuse pre-allocated buffers (clear is O(1), keeps capacity)
             candidates.clear();
-            result.clear();
+            results.clear();
             visited.reset();
             visited.set(i);
 
             let d_entry = dist_fn(query_slice, &flat[curr_entry * d..][..d]);
-            candidates.push(Candidate {
-                distance: d_entry,
-                id: curr_entry,
-            });
+            candidates.push(d_entry, curr_entry as u32);
+            results.push(d_entry, curr_entry as u32);
             visited.set(curr_entry);
 
-            while let Some(cand) = candidates.pop() {
-                // If we have enough results and the candidate is worse than the worst result, stop
-                if result.len() >= ef {
-                    if let Some(worst) = result.last() {
-                        if cand.distance > worst.distance {
-                            break;
-                        }
-                    }
+            while !candidates.is_empty() {
+                let (cand_dist, cand_id) = candidates.pop();
+
+                // FAISS termination: stop when best candidate > worst result
+                if results.len() >= ef && cand_dist > results.peek_max_dis() {
+                    break;
                 }
 
-                result.push(cand);
-
-                // Explore neighbors
+                // Explore neighbors with batch_4 distance
                 let nb_slice = get_neighbors_mut_slice(
                     &neighbors,
                     &offsets,
                     &cum_nneighbor_per_level,
-                    cand.id,
+                    cand_id as usize,
                     level,
                 );
+
+                let mut counter = 0;
                 for &nb in nb_slice {
                     if nb < 0 {
+                        break;
+                    }
+                    if !visited.check_and_set(nb as usize) {
                         continue;
                     }
-                    let nb = nb as usize;
-                    if visited.is_visited(nb) {
-                        continue;
+
+                    saved[counter] = nb as u32;
+                    counter += 1;
+
+                    if counter == 4 {
+                        let dists = unsafe {
+                            dist_batch_4(
+                                query_slice,
+                                &flat[saved[0] as usize * d..][..d],
+                                &flat[saved[1] as usize * d..][..d],
+                                &flat[saved[2] as usize * d..][..d],
+                                &flat[saved[3] as usize * d..][..d],
+                            )
+                        };
+
+                        for k in 0..4 {
+                            let nb_id = saved[k];
+                            let d_nb = dists[k];
+                            if results.len() < ef {
+                                candidates.push(d_nb, nb_id);
+                                results.push(d_nb, nb_id);
+                            } else if d_nb < results.peek_max_dis() {
+                                candidates.push(d_nb, nb_id);
+                                results.replace_max(d_nb, nb_id);
+                            }
+                        }
+                        counter = 0;
                     }
-                    visited.set(nb);
-                    let d_nb = dist_fn(query_slice, &flat[nb * d..][..d]);
-                    candidates.push(Candidate {
-                        distance: d_nb,
-                        id: nb,
-                    });
+                }
+
+                // Process remainder (1-3 leftover neighbors)
+                for k in 0..counter {
+                    let nb_id = saved[k];
+                    let d_nb = dist_fn(query_slice, &flat[nb_id as usize * d..][..d]);
+                    if results.len() < ef {
+                        candidates.push(d_nb, nb_id);
+                        results.push(d_nb, nb_id);
+                    } else if d_nb < results.peek_max_dis() {
+                        candidates.push(d_nb, nb_id);
+                        results.replace_max(d_nb, nb_id);
+                    }
                 }
             }
 
-            // Sort results by distance and take top max_neighbors
-            result.sort_unstable_by(|a, b| {
-                a.distance
-                    .partial_cmp(&b.distance)
-                    .unwrap_or(Ordering::Equal)
+            // Extract top max_neighbors from the bounded results heap
+            // Pop all from max-heap into a vec, sort, take top max_neighbors
+            let mut result_vec: Vec<(f32, u32)> = Vec::with_capacity(results.len());
+            while results.len() > 0 {
+                let (d, id) = results.pop_max();
+                result_vec.push((d, id));
+            }
+            result_vec.sort_unstable_by(|a, b| {
+                a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
             });
-            result.truncate(max_neighbors);
+            result_vec.truncate(max_neighbors);
 
             // Connect node i to its neighbors at this level
             let neighbors_range = get_neighbor_range(&offsets, &cum_nneighbor_per_level, i, level);
-            for (slot, cand) in neighbors_range.zip(result.iter()) {
-                neighbors[slot] = cand.id as i32;
+            for (slot, &(_, id)) in neighbors_range.zip(result_vec.iter()) {
+                neighbors[slot] = id as i32;
             }
 
             // Add reverse connections
-            for cand in &result {
+            for &(_, id) in &result_vec {
                 add_reverse_connection(
                     &mut neighbors,
                     &offsets,
                     &cum_nneighbor_per_level,
-                    cand.id,
+                    id as usize,
                     i as i32,
                     level,
                     max_neighbors,
@@ -292,8 +311,8 @@ fn build_hnsw_serial_inner<D: Fn(&[f32], &[f32]) -> f32>(
                 );
             }
 
-            if !result.is_empty() {
-                curr_entry = result[0].id;
+            if !result_vec.is_empty() {
+                curr_entry = result_vec[0].1 as usize;
             }
         }
 
@@ -323,21 +342,33 @@ fn build_hnsw_parallel(
 ) -> Result<HnswGraph> {
     // Dispatch on metric to monomorphize — inlines SIMD distance into build loops.
     match config.distance_metric {
-        DistanceMetric::L2 => build_hnsw_parallel_inner(data, config, pool, l2_distance),
-        DistanceMetric::Mips | DistanceMetric::Cosine => {
-            build_hnsw_parallel_inner(data, config, pool, inner_product_distance)
+        DistanceMetric::L2 => {
+            build_hnsw_parallel_inner(data, config, pool, l2_distance, l2_distance_batch_4)
         }
+        DistanceMetric::Mips | DistanceMetric::Cosine => build_hnsw_parallel_inner(
+            data,
+            config,
+            pool,
+            inner_product_distance,
+            inner_product_distance_batch_4,
+        ),
     }
 }
 
-/// Monomorphized parallel build. Generic `D` ensures the distance function
-/// is inlined into the hot loops rather than called through a function pointer.
-fn build_hnsw_parallel_inner<D: Fn(&[f32], &[f32]) -> f32 + Sync>(
+/// Monomorphized parallel build. Generic `D` and `B` ensure the distance
+/// functions are inlined into the hot loops rather than called through
+/// function pointers.
+fn build_hnsw_parallel_inner<D, B>(
     data: &Array2<f32>,
     config: &HnswConfig,
     pool: &rayon::ThreadPool,
     dist_fn: D,
-) -> Result<HnswGraph> {
+    dist_batch_4: B,
+) -> Result<HnswGraph>
+where
+    D: Fn(&[f32], &[f32]) -> f32 + Sync,
+    B: Fn(&[f32], &[f32], &[f32], &[f32], &[f32]) -> [f32; 4] + Sync,
+{
     let n = data.nrows();
     let d = data.ncols();
 
@@ -405,16 +436,17 @@ fn build_hnsw_parallel_inner<D: Fn(&[f32], &[f32]) -> f32 + Sync>(
 
     pool.install(|| {
         let dist_ref = &dist_fn;
+        let batch_ref = &dist_batch_4;
         (1..n).into_par_iter().for_each_init(
             // Per-thread buffer allocation (runs once per rayon worker)
             || {
                 (
                     VisitedList::new(n),
-                    BinaryHeap::with_capacity(ef * 2 * m),
-                    Vec::<Candidate>::with_capacity(ef),
+                    FlatMinHeap::new(ef * 2 * m),
+                    FlatMaxHeap::new(ef),
                 )
             },
-            |(visited, candidates, result), i| {
+            |(visited, candidates, results), i| {
                 let node_level = levels[i] - 1;
 
                 let query_slice = &flat[i * d..][..d];
@@ -452,77 +484,117 @@ fn build_hnsw_parallel_inner<D: Fn(&[f32], &[f32]) -> f32 + Sync>(
                 }
 
                 // Phase 2: search & connect at each level from node_level down to 0
+                // Uses FAISS-style bounded max-heap + batch_4 distance.
+                let mut saved: [u32; 4] = [0; 4];
+
                 for level in (0..=node_level as usize).rev() {
                     let max_neighbors = if level == 0 { 2 * m } else { m };
 
                     candidates.clear();
-                    result.clear();
+                    results.clear();
                     visited.reset();
                     visited.set(i);
 
                     let d_entry = dist_ref(query_slice, &flat[curr_entry * d..][..d]);
-                    candidates.push(Candidate {
-                        distance: d_entry,
-                        id: curr_entry,
-                    });
+                    candidates.push(d_entry, curr_entry as u32);
+                    results.push(d_entry, curr_entry as u32);
                     visited.set(curr_entry);
 
-                    while let Some(cand) = candidates.pop() {
-                        if result.len() >= ef {
-                            if let Some(worst) = result.last() {
-                                if cand.distance > worst.distance {
-                                    break;
-                                }
-                            }
-                        }
+                    while !candidates.is_empty() {
+                        let (cand_dist, cand_id) = candidates.pop();
 
-                        result.push(cand);
+                        if results.len() >= ef && cand_dist > results.peek_max_dis() {
+                            break;
+                        }
 
                         let nb_slice = get_neighbors_atomic_slice(
                             &neighbors,
                             &offsets,
                             &cum_nneighbor_per_level,
-                            cand.id,
+                            cand_id as usize,
                             level,
                         );
+
+                        let mut counter = 0;
                         for atom in nb_slice {
                             let nb = atom.load(AtomicOrdering::Relaxed);
                             if nb < 0 {
+                                break;
+                            }
+                            if !visited.check_and_set(nb as usize) {
                                 continue;
                             }
-                            let nb = nb as usize;
-                            if visited.is_visited(nb) {
-                                continue;
+
+                            saved[counter] = nb as u32;
+                            counter += 1;
+
+                            if counter == 4 {
+                                let dists = unsafe {
+                                    batch_ref(
+                                        query_slice,
+                                        &flat[saved[0] as usize * d..][..d],
+                                        &flat[saved[1] as usize * d..][..d],
+                                        &flat[saved[2] as usize * d..][..d],
+                                        &flat[saved[3] as usize * d..][..d],
+                                    )
+                                };
+
+                                for k in 0..4 {
+                                    let nb_id = saved[k];
+                                    let d_nb = dists[k];
+                                    if results.len() < ef {
+                                        candidates.push(d_nb, nb_id);
+                                        results.push(d_nb, nb_id);
+                                    } else if d_nb < results.peek_max_dis() {
+                                        candidates.push(d_nb, nb_id);
+                                        results.replace_max(d_nb, nb_id);
+                                    }
+                                }
+                                counter = 0;
                             }
-                            visited.set(nb);
-                            let d_nb = dist_ref(query_slice, &flat[nb * d..][..d]);
-                            candidates.push(Candidate {
-                                distance: d_nb,
-                                id: nb,
-                            });
+                        }
+
+                        // Process remainder (1-3 leftover neighbors)
+                        for k in 0..counter {
+                            let nb_id = saved[k];
+                            let d_nb =
+                                dist_ref(query_slice, &flat[nb_id as usize * d..][..d]);
+                            if results.len() < ef {
+                                candidates.push(d_nb, nb_id);
+                                results.push(d_nb, nb_id);
+                            } else if d_nb < results.peek_max_dis() {
+                                candidates.push(d_nb, nb_id);
+                                results.replace_max(d_nb, nb_id);
+                            }
                         }
                     }
 
-                    result.sort_unstable_by(|a, b| {
-                        a.distance
-                            .partial_cmp(&b.distance)
-                            .unwrap_or(Ordering::Equal)
+                    // Extract top max_neighbors from bounded results heap
+                    let mut result_vec: Vec<(f32, u32)> =
+                        Vec::with_capacity(results.len());
+                    while results.len() > 0 {
+                        let (dd, id) = results.pop_max();
+                        result_vec.push((dd, id));
+                    }
+                    result_vec.sort_unstable_by(|a, b| {
+                        a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
                     });
-                    result.truncate(max_neighbors);
+                    result_vec.truncate(max_neighbors);
 
                     // Forward connections: only this thread writes to node i's slots
-                    let range = get_neighbor_range(&offsets, &cum_nneighbor_per_level, i, level);
-                    for (slot, cand) in range.zip(result.iter()) {
-                        neighbors[slot].store(cand.id as i32, AtomicOrdering::Relaxed);
+                    let range =
+                        get_neighbor_range(&offsets, &cum_nneighbor_per_level, i, level);
+                    for (slot, &(_, id)) in range.zip(result_vec.iter()) {
+                        neighbors[slot].store(id as i32, AtomicOrdering::Relaxed);
                     }
 
                     // Reverse connections via CAS
-                    for cand in result.iter() {
+                    for &(_, id) in result_vec.iter() {
                         add_reverse_connection_atomic(
                             &neighbors,
                             &offsets,
                             &cum_nneighbor_per_level,
-                            cand.id,
+                            id as usize,
                             i as i32,
                             level,
                             &flat,
@@ -531,8 +603,8 @@ fn build_hnsw_parallel_inner<D: Fn(&[f32], &[f32]) -> f32 + Sync>(
                         );
                     }
 
-                    if !result.is_empty() {
-                        curr_entry = result[0].id;
+                    if !result_vec.is_empty() {
+                        curr_entry = result_vec[0].1 as usize;
                     }
                 }
 

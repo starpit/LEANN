@@ -53,7 +53,7 @@ impl Default for SearchParams {
 
 /// Min-heap using separate flat arrays for distances and IDs.
 /// Direct f32 comparison, no Ord trait, no bounds checking in sift.
-struct FlatMinHeap {
+pub(crate) struct FlatMinHeap {
     dis: Vec<f32>,
     ids: Vec<u32>,
     len: usize,
@@ -61,7 +61,7 @@ struct FlatMinHeap {
 
 impl FlatMinHeap {
     #[inline]
-    fn new(capacity: usize) -> Self {
+    pub(crate) fn new(capacity: usize) -> Self {
         Self {
             dis: Vec::with_capacity(capacity),
             ids: Vec::with_capacity(capacity),
@@ -70,12 +70,17 @@ impl FlatMinHeap {
     }
 
     #[inline(always)]
-    fn is_empty(&self) -> bool {
+    pub(crate) fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    #[inline(always)]
+    pub(crate) fn is_empty(&self) -> bool {
         self.len == 0
     }
 
     #[inline]
-    fn push(&mut self, dis: f32, id: u32) {
+    pub(crate) fn push(&mut self, dis: f32, id: u32) {
         let pos = self.len;
         if pos == self.dis.len() {
             self.dis.push(dis);
@@ -92,7 +97,7 @@ impl FlatMinHeap {
 
     /// Pop the minimum element. Caller must check is_empty() first.
     #[inline]
-    fn pop(&mut self) -> (f32, u32) {
+    pub(crate) fn pop(&mut self) -> (f32, u32) {
         debug_assert!(self.len > 0);
         unsafe {
             let dis = *self.dis.get_unchecked(0);
@@ -162,7 +167,7 @@ impl FlatMinHeap {
 // ── Flat-array max-heap for results ──────────────────────────────────
 
 /// Max-heap using separate flat arrays. Worst distance at root for O(1) rejection.
-struct FlatMaxHeap {
+pub(crate) struct FlatMaxHeap {
     dis: Vec<f32>,
     ids: Vec<u32>,
     len: usize,
@@ -170,7 +175,7 @@ struct FlatMaxHeap {
 
 impl FlatMaxHeap {
     #[inline]
-    fn new(capacity: usize) -> Self {
+    pub(crate) fn new(capacity: usize) -> Self {
         Self {
             dis: Vec::with_capacity(capacity),
             ids: Vec::with_capacity(capacity),
@@ -179,19 +184,41 @@ impl FlatMaxHeap {
     }
 
     #[inline(always)]
-    fn len(&self) -> usize {
+    pub(crate) fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    #[inline(always)]
+    pub(crate) fn len(&self) -> usize {
         self.len
     }
 
     /// Peek at the maximum distance (heap root).
     #[inline(always)]
-    fn peek_max_dis(&self) -> f32 {
+    pub(crate) fn peek_max_dis(&self) -> f32 {
         debug_assert!(self.len > 0);
         unsafe { *self.dis.get_unchecked(0) }
     }
 
+    /// Pop the maximum element. Caller must check len() > 0 first.
     #[inline]
-    fn push(&mut self, dis: f32, id: u32) {
+    pub(crate) fn pop_max(&mut self) -> (f32, u32) {
+        debug_assert!(self.len > 0);
+        unsafe {
+            let dis = *self.dis.get_unchecked(0);
+            let id = *self.ids.get_unchecked(0);
+            self.len -= 1;
+            if self.len > 0 {
+                *self.dis.get_unchecked_mut(0) = *self.dis.get_unchecked(self.len);
+                *self.ids.get_unchecked_mut(0) = *self.ids.get_unchecked(self.len);
+                self.sift_down(0);
+            }
+            (dis, id)
+        }
+    }
+
+    #[inline]
+    pub(crate) fn push(&mut self, dis: f32, id: u32) {
         let pos = self.len;
         if pos == self.dis.len() {
             self.dis.push(dis);
@@ -209,7 +236,7 @@ impl FlatMaxHeap {
     /// Replace the maximum (root) with a new element and sift down.
     /// More efficient than pop + push.
     #[inline]
-    fn replace_max(&mut self, dis: f32, id: u32) {
+    pub(crate) fn replace_max(&mut self, dis: f32, id: u32) {
         debug_assert!(self.len > 0);
         self.dis[0] = dis;
         self.ids[0] = id;
@@ -217,7 +244,7 @@ impl FlatMaxHeap {
     }
 
     /// Collect all entries sorted by ascending distance.
-    fn into_sorted(self) -> (Vec<u32>, Vec<f32>) {
+    pub(crate) fn into_sorted(self) -> (Vec<u32>, Vec<f32>) {
         let mut pairs: Vec<(f32, u32)> = self.dis[..self.len]
             .iter()
             .zip(self.ids[..self.len].iter())
