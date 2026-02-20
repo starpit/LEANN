@@ -1,8 +1,10 @@
 use std::cmp::Ordering;
-use std::collections::BinaryHeap;
 
 use super::graph::*;
-use super::simd::{inner_product_distance, l2_distance, VisitedList};
+use super::simd::{
+    inner_product_distance, inner_product_distance_batch_4, l2_distance, l2_distance_batch_4,
+    VisitedList,
+};
 
 /// Search parameters for HNSW search.
 #[derive(Debug, Clone)]
@@ -47,61 +49,239 @@ impl Default for SearchParams {
     }
 }
 
-/// A neighbor candidate with distance.
-#[derive(Debug, Clone, Copy)]
-struct SearchCandidate {
-    distance: f32,
-    id: usize,
+// ── Flat-array min-heap for candidates ───────────────────────────────
+
+/// Min-heap using separate flat arrays for distances and IDs.
+/// Direct f32 comparison, no Ord trait, no bounds checking in sift.
+struct FlatMinHeap {
+    dis: Vec<f32>,
+    ids: Vec<u32>,
+    len: usize,
 }
 
-impl PartialEq for SearchCandidate {
-    fn eq(&self, other: &Self) -> bool {
-        self.distance == other.distance && self.id == other.id
+impl FlatMinHeap {
+    #[inline]
+    fn new(capacity: usize) -> Self {
+        Self {
+            dis: Vec::with_capacity(capacity),
+            ids: Vec::with_capacity(capacity),
+            len: 0,
+        }
+    }
+
+    #[inline(always)]
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    #[inline]
+    fn push(&mut self, dis: f32, id: u32) {
+        let pos = self.len;
+        if pos == self.dis.len() {
+            self.dis.push(dis);
+            self.ids.push(id);
+        } else {
+            unsafe {
+                *self.dis.get_unchecked_mut(pos) = dis;
+                *self.ids.get_unchecked_mut(pos) = id;
+            }
+        }
+        self.len += 1;
+        self.sift_up(pos);
+    }
+
+    /// Pop the minimum element. Caller must check is_empty() first.
+    #[inline]
+    fn pop(&mut self) -> (f32, u32) {
+        debug_assert!(self.len > 0);
+        unsafe {
+            let dis = *self.dis.get_unchecked(0);
+            let id = *self.ids.get_unchecked(0);
+            self.len -= 1;
+            if self.len > 0 {
+                *self.dis.get_unchecked_mut(0) = *self.dis.get_unchecked(self.len);
+                *self.ids.get_unchecked_mut(0) = *self.ids.get_unchecked(self.len);
+                self.sift_down(0);
+            }
+            (dis, id)
+        }
+    }
+
+    #[inline]
+    fn sift_up(&mut self, mut pos: usize) {
+        unsafe {
+            let d = *self.dis.get_unchecked(pos);
+            let id = *self.ids.get_unchecked(pos);
+            while pos > 0 {
+                let parent = (pos - 1) >> 1;
+                let pd = *self.dis.get_unchecked(parent);
+                if d < pd {
+                    *self.dis.get_unchecked_mut(pos) = pd;
+                    *self.ids.get_unchecked_mut(pos) = *self.ids.get_unchecked(parent);
+                    pos = parent;
+                } else {
+                    break;
+                }
+            }
+            *self.dis.get_unchecked_mut(pos) = d;
+            *self.ids.get_unchecked_mut(pos) = id;
+        }
+    }
+
+    #[inline]
+    fn sift_down(&mut self, mut pos: usize) {
+        let n = self.len;
+        unsafe {
+            let d = *self.dis.get_unchecked(pos);
+            let id = *self.ids.get_unchecked(pos);
+            loop {
+                let left = 2 * pos + 1;
+                if left >= n {
+                    break;
+                }
+                let right = left + 1;
+                let mut smallest = left;
+                if right < n && *self.dis.get_unchecked(right) < *self.dis.get_unchecked(left) {
+                    smallest = right;
+                }
+                let sd = *self.dis.get_unchecked(smallest);
+                if sd < d {
+                    *self.dis.get_unchecked_mut(pos) = sd;
+                    *self.ids.get_unchecked_mut(pos) = *self.ids.get_unchecked(smallest);
+                    pos = smallest;
+                } else {
+                    break;
+                }
+            }
+            *self.dis.get_unchecked_mut(pos) = d;
+            *self.ids.get_unchecked_mut(pos) = id;
+        }
     }
 }
-impl Eq for SearchCandidate {}
 
-// Min-heap ordering (smallest distance first)
-impl PartialOrd for SearchCandidate {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
+// ── Flat-array max-heap for results ──────────────────────────────────
+
+/// Max-heap using separate flat arrays. Worst distance at root for O(1) rejection.
+struct FlatMaxHeap {
+    dis: Vec<f32>,
+    ids: Vec<u32>,
+    len: usize,
+}
+
+impl FlatMaxHeap {
+    #[inline]
+    fn new(capacity: usize) -> Self {
+        Self {
+            dis: Vec::with_capacity(capacity),
+            ids: Vec::with_capacity(capacity),
+            len: 0,
+        }
     }
-}
 
-impl Ord for SearchCandidate {
-    fn cmp(&self, other: &Self) -> Ordering {
-        other
-            .distance
-            .partial_cmp(&self.distance)
-            .unwrap_or(Ordering::Equal)
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.len
     }
-}
 
-/// Max-heap ordering for result set (largest distance first, so we can evict worst).
-#[derive(Debug, Clone, Copy)]
-struct MaxCandidate {
-    distance: f32,
-    id: usize,
-}
-
-impl PartialEq for MaxCandidate {
-    fn eq(&self, other: &Self) -> bool {
-        self.distance == other.distance && self.id == other.id
+    /// Peek at the maximum distance (heap root).
+    #[inline(always)]
+    fn peek_max_dis(&self) -> f32 {
+        debug_assert!(self.len > 0);
+        unsafe { *self.dis.get_unchecked(0) }
     }
-}
-impl Eq for MaxCandidate {}
 
-impl PartialOrd for MaxCandidate {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
+    #[inline]
+    fn push(&mut self, dis: f32, id: u32) {
+        let pos = self.len;
+        if pos == self.dis.len() {
+            self.dis.push(dis);
+            self.ids.push(id);
+        } else {
+            unsafe {
+                *self.dis.get_unchecked_mut(pos) = dis;
+                *self.ids.get_unchecked_mut(pos) = id;
+            }
+        }
+        self.len += 1;
+        self.sift_up(pos);
     }
-}
 
-impl Ord for MaxCandidate {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.distance
-            .partial_cmp(&other.distance)
-            .unwrap_or(Ordering::Equal)
+    /// Replace the maximum (root) with a new element and sift down.
+    /// More efficient than pop + push.
+    #[inline]
+    fn replace_max(&mut self, dis: f32, id: u32) {
+        debug_assert!(self.len > 0);
+        self.dis[0] = dis;
+        self.ids[0] = id;
+        self.sift_down(0);
+    }
+
+    /// Collect all entries sorted by ascending distance.
+    fn into_sorted(self) -> (Vec<u32>, Vec<f32>) {
+        let mut pairs: Vec<(f32, u32)> = self.dis[..self.len]
+            .iter()
+            .zip(self.ids[..self.len].iter())
+            .map(|(&d, &id)| (d, id))
+            .collect();
+        pairs.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+        let mut ids = Vec::with_capacity(pairs.len());
+        let mut dis = Vec::with_capacity(pairs.len());
+        for (d, id) in pairs {
+            ids.push(id);
+            dis.push(d);
+        }
+        (ids, dis)
+    }
+
+    #[inline]
+    fn sift_up(&mut self, mut pos: usize) {
+        unsafe {
+            let d = *self.dis.get_unchecked(pos);
+            let id = *self.ids.get_unchecked(pos);
+            while pos > 0 {
+                let parent = (pos - 1) >> 1;
+                let pd = *self.dis.get_unchecked(parent);
+                if d > pd {
+                    *self.dis.get_unchecked_mut(pos) = pd;
+                    *self.ids.get_unchecked_mut(pos) = *self.ids.get_unchecked(parent);
+                    pos = parent;
+                } else {
+                    break;
+                }
+            }
+            *self.dis.get_unchecked_mut(pos) = d;
+            *self.ids.get_unchecked_mut(pos) = id;
+        }
+    }
+
+    #[inline]
+    fn sift_down(&mut self, mut pos: usize) {
+        let n = self.len;
+        unsafe {
+            let d = *self.dis.get_unchecked(pos);
+            let id = *self.ids.get_unchecked(pos);
+            loop {
+                let left = 2 * pos + 1;
+                if left >= n {
+                    break;
+                }
+                let right = left + 1;
+                let mut largest = left;
+                if right < n && *self.dis.get_unchecked(right) > *self.dis.get_unchecked(left) {
+                    largest = right;
+                }
+                let ld = *self.dis.get_unchecked(largest);
+                if ld > d {
+                    *self.dis.get_unchecked_mut(pos) = ld;
+                    *self.ids.get_unchecked_mut(pos) = *self.ids.get_unchecked(largest);
+                    pos = largest;
+                } else {
+                    break;
+                }
+            }
+            *self.dis.get_unchecked_mut(pos) = d;
+            *self.ids.get_unchecked_mut(pos) = id;
+        }
     }
 }
 
@@ -165,6 +345,7 @@ pub fn search_hnsw_buf(
             params,
             &mut buffers.visited,
             l2_distance,
+            l2_distance_batch_4,
         ),
         _ => search_hnsw_inner(
             graph,
@@ -174,6 +355,7 @@ pub fn search_hnsw_buf(
             params,
             &mut buffers.visited,
             inner_product_distance,
+            inner_product_distance_batch_4,
         ),
     }
 }
@@ -188,10 +370,14 @@ unsafe fn get_vec(vectors: &[f32], id: usize, dim: usize) -> &[f32] {
     vectors.get_unchecked(id * dim..id * dim + dim)
 }
 
-/// Monomorphized search implementation. The generic `D` parameter ensures
-/// the distance function is inlined into the loop body rather than called
-/// through an indirect function pointer.
-fn search_hnsw_inner<D: Fn(&[f32], &[f32]) -> f32>(
+/// Optimized HNSW search with dual flat-array heaps and batched 4x distance.
+///
+/// Key optimizations:
+/// - Custom flat-array heaps with u32 IDs and direct f32 comparison (no Ord trait)
+/// - Batched 4x distance: query loaded once, reused across 4 database vectors
+/// - Combined check_and_set: single cache access for visited check + mark
+/// - replace_max on result heap: single sift_down instead of pop + push
+fn search_hnsw_inner<D, B>(
     graph: &HnswGraph,
     query: &[f32],
     top_k: usize,
@@ -199,7 +385,12 @@ fn search_hnsw_inner<D: Fn(&[f32], &[f32]) -> f32>(
     params: &SearchParams,
     visited: &mut VisitedList,
     dist_fn: D,
-) -> (Vec<usize>, Vec<f32>) {
+    dist_batch_4: B,
+) -> (Vec<usize>, Vec<f32>)
+where
+    D: Fn(&[f32], &[f32]) -> f32,
+    B: Fn(&[f32], &[f32], &[f32], &[f32], &[f32]) -> [f32; 4],
+{
     let d = graph.dimensions;
     let ef = params.ef_search.max(top_k);
 
@@ -216,7 +407,7 @@ fn search_hnsw_inner<D: Fn(&[f32], &[f32]) -> f32>(
             let neighbors = graph.get_neighbors(curr, level);
             for &nb in neighbors {
                 if nb < 0 {
-                    break; // valid neighbors are packed at front
+                    break;
                 }
                 let nb = nb as usize;
                 let d_nb = unsafe { dist_fn(query, get_vec(vectors, nb, d)) };
@@ -232,81 +423,100 @@ fn search_hnsw_inner<D: Fn(&[f32], &[f32]) -> f32>(
         }
     }
 
-    // Phase 2: Search at level 0 with ef candidates
-    let mut candidates = BinaryHeap::with_capacity(ef * 2); // min-heap
-    let mut results = BinaryHeap::with_capacity(ef); // max-heap (for eviction)
+    // Phase 2: Search at level 0 with dual flat-array heaps
+    let mut candidates = FlatMinHeap::new(ef * 2);
+    let mut results = FlatMaxHeap::new(ef);
     visited.reset();
 
     let d_entry = unsafe { dist_fn(query, get_vec(vectors, curr, d)) };
-    candidates.push(SearchCandidate {
-        distance: d_entry,
-        id: curr,
-    });
-    results.push(MaxCandidate {
-        distance: d_entry,
-        id: curr,
-    });
+    candidates.push(d_entry, curr as u32);
+    results.push(d_entry, curr as u32);
     visited.set(curr);
 
     // Cache worst distance to avoid heap peek on every neighbor check.
     let mut worst_dist = d_entry;
 
-    while let Some(cand) = candidates.pop() {
+    // Scratch buffer for batching unvisited neighbors
+    let mut saved: [u32; 4] = [0; 4];
+
+    while !candidates.is_empty() {
+        let (cand_dist, cand_id) = candidates.pop();
+
         // If candidate is worse than worst result and we have enough results, stop
-        if results.len() >= ef && cand.distance > worst_dist {
+        if results.len() >= ef && cand_dist > worst_dist {
             break;
         }
 
-        let neighbors = graph.get_neighbors(cand.id, 0);
+        let neighbors = graph.get_neighbors(cand_id as usize, 0);
+
+        // Single-pass: check visited + accumulate batches of 4 for distance
+        let mut counter = 0;
         for &nb in neighbors {
             if nb < 0 {
-                break; // valid neighbors are packed at front
+                break;
             }
-            let nb = nb as usize;
-            if visited.is_visited(nb) {
+            if !visited.check_and_set(nb as usize) {
                 continue;
             }
-            visited.set(nb);
 
-            let d_nb = unsafe { dist_fn(query, get_vec(vectors, nb, d)) };
+            saved[counter] = nb as u32;
+            counter += 1;
 
-            // Add to results if better than worst, or if not full yet
+            if counter == 4 {
+                let dists = unsafe {
+                    dist_batch_4(
+                        query,
+                        get_vec(vectors, saved[0] as usize, d),
+                        get_vec(vectors, saved[1] as usize, d),
+                        get_vec(vectors, saved[2] as usize, d),
+                        get_vec(vectors, saved[3] as usize, d),
+                    )
+                };
+
+                for k in 0..4 {
+                    let nb_id = saved[k];
+                    let d_nb = dists[k];
+
+                    if results.len() < ef {
+                        candidates.push(d_nb, nb_id);
+                        results.push(d_nb, nb_id);
+                        if results.len() == ef {
+                            worst_dist = results.peek_max_dis();
+                        }
+                    } else if d_nb < worst_dist {
+                        candidates.push(d_nb, nb_id);
+                        results.replace_max(d_nb, nb_id);
+                        worst_dist = results.peek_max_dis();
+                    }
+                }
+                counter = 0;
+            }
+        }
+
+        // Process remainder (1-3 leftover neighbors)
+        for k in 0..counter {
+            let nb_id = saved[k];
+            let d_nb = unsafe { dist_fn(query, get_vec(vectors, nb_id as usize, d)) };
+
             if results.len() < ef {
-                candidates.push(SearchCandidate {
-                    distance: d_nb,
-                    id: nb,
-                });
-                results.push(MaxCandidate {
-                    distance: d_nb,
-                    id: nb,
-                });
+                candidates.push(d_nb, nb_id);
+                results.push(d_nb, nb_id);
                 if results.len() == ef {
-                    worst_dist = results.peek().unwrap().distance;
+                    worst_dist = results.peek_max_dis();
                 }
             } else if d_nb < worst_dist {
-                candidates.push(SearchCandidate {
-                    distance: d_nb,
-                    id: nb,
-                });
-                results.pop();
-                results.push(MaxCandidate {
-                    distance: d_nb,
-                    id: nb,
-                });
-                worst_dist = results.peek().unwrap().distance;
+                candidates.push(d_nb, nb_id);
+                results.replace_max(d_nb, nb_id);
+                worst_dist = results.peek_max_dis();
             }
         }
     }
 
-    // Collect results — into_sorted_vec() returns ascending distance order
-    let result_vec = results.into_sorted_vec();
-
-    let mut labels = Vec::with_capacity(top_k);
-    let mut distances = Vec::with_capacity(top_k);
-    for c in result_vec.into_iter().take(top_k) {
-        labels.push(c.id);
-        distances.push(c.distance);
-    }
+    // Collect results sorted by ascending distance, take top_k
+    let (sorted_ids, sorted_dis) = results.into_sorted();
+    let n = top_k.min(sorted_ids.len());
+    let labels: Vec<usize> = sorted_ids[..n].iter().map(|&id| id as usize).collect();
+    let distances: Vec<f32> = sorted_dis[..n].to_vec();
 
     (labels, distances)
 }
@@ -370,41 +580,34 @@ where
         }
     }
 
-    // Phase 2: ef-search at level 0
-    let mut candidates = BinaryHeap::with_capacity(ef * 2);
-    let mut results = BinaryHeap::with_capacity(ef);
+    // Phase 2: ef-search at level 0 with flat-array heaps
+    let mut candidates = FlatMinHeap::new(ef * 2);
+    let mut results = FlatMaxHeap::new(ef);
     let mut visited = VisitedList::new(graph.ntotal);
     visited.reset();
 
     let entry_dists = compute_distance(&[curr], query);
     let d_entry = entry_dists[0];
-    candidates.push(SearchCandidate {
-        distance: d_entry,
-        id: curr,
-    });
-    results.push(MaxCandidate {
-        distance: d_entry,
-        id: curr,
-    });
+    candidates.push(d_entry, curr as u32);
+    results.push(d_entry, curr as u32);
     visited.set(curr);
 
-    while let Some(cand) = candidates.pop() {
-        if results.len() >= ef {
-            if let Some(worst) = results.peek() {
-                if cand.distance > worst.distance {
-                    break;
-                }
-            }
+    let mut worst_dist = d_entry;
+
+    while !candidates.is_empty() {
+        let (cand_dist, cand_id) = candidates.pop();
+
+        if results.len() >= ef && cand_dist > worst_dist {
+            break;
         }
 
-        let neighbors = graph.get_neighbors(cand.id, 0);
+        let neighbors = graph.get_neighbors(cand_id as usize, 0);
 
         node_buf.clear();
         for &nb in neighbors {
             if nb >= 0 {
                 let nb = nb as usize;
-                if !visited.is_visited(nb) {
-                    visited.set(nb);
+                if visited.check_and_set(nb) {
                     node_buf.push(nb);
                 }
             }
@@ -415,44 +618,28 @@ where
         }
 
         let distances = compute_distance(&node_buf, query);
-        // Trim distances to node_buf length so the compiler knows they match
         let distances = &distances[..node_buf.len()];
 
         for (&d_nb, &nb) in distances.iter().zip(node_buf.iter()) {
             if results.len() < ef {
-                candidates.push(SearchCandidate {
-                    distance: d_nb,
-                    id: nb,
-                });
-                results.push(MaxCandidate {
-                    distance: d_nb,
-                    id: nb,
-                });
-            } else if let Some(worst) = results.peek() {
-                if d_nb < worst.distance {
-                    candidates.push(SearchCandidate {
-                        distance: d_nb,
-                        id: nb,
-                    });
-                    results.pop();
-                    results.push(MaxCandidate {
-                        distance: d_nb,
-                        id: nb,
-                    });
+                candidates.push(d_nb, nb as u32);
+                results.push(d_nb, nb as u32);
+                if results.len() == ef {
+                    worst_dist = results.peek_max_dis();
                 }
+            } else if d_nb < worst_dist {
+                candidates.push(d_nb, nb as u32);
+                results.replace_max(d_nb, nb as u32);
+                worst_dist = results.peek_max_dis();
             }
         }
     }
 
-    // Collect results — into_sorted_vec() returns ascending distance order
-    let result_vec = results.into_sorted_vec();
-
-    let mut labels = Vec::with_capacity(top_k);
-    let mut distances = Vec::with_capacity(top_k);
-    for c in result_vec.into_iter().take(top_k) {
-        labels.push(c.id);
-        distances.push(c.distance);
-    }
+    // Collect results sorted by ascending distance, take top_k
+    let (sorted_ids, sorted_dis) = results.into_sorted();
+    let n = top_k.min(sorted_ids.len());
+    let labels: Vec<usize> = sorted_ids[..n].iter().map(|&id| id as usize).collect();
+    let distances: Vec<f32> = sorted_dis[..n].to_vec();
 
     (labels, distances)
 }
