@@ -212,7 +212,7 @@ where
                 let (cand_dist, cand_id) = candidates.pop();
 
                 // FAISS termination: stop when best candidate > worst result
-                if results.len() >= ef && cand_dist > results.peek_max_dis() {
+                if cand_dist > results.peek_max_dis() {
                     break;
                 }
 
@@ -238,15 +238,13 @@ where
                     counter += 1;
 
                     if counter == 4 {
-                        let dists = unsafe {
-                            dist_batch_4(
+                        let dists = dist_batch_4(
                                 query_slice,
                                 &flat[saved[0] as usize * d..][..d],
                                 &flat[saved[1] as usize * d..][..d],
                                 &flat[saved[2] as usize * d..][..d],
                                 &flat[saved[3] as usize * d..][..d],
-                            )
-                        };
+                        );
 
                         for k in 0..4 {
                             let nb_id = saved[k];
@@ -503,7 +501,7 @@ where
                     while !candidates.is_empty() {
                         let (cand_dist, cand_id) = candidates.pop();
 
-                        if results.len() >= ef && cand_dist > results.peek_max_dis() {
+                        if cand_dist > results.peek_max_dis() {
                             break;
                         }
 
@@ -529,15 +527,13 @@ where
                             counter += 1;
 
                             if counter == 4 {
-                                let dists = unsafe {
-                                    batch_ref(
-                                        query_slice,
-                                        &flat[saved[0] as usize * d..][..d],
-                                        &flat[saved[1] as usize * d..][..d],
-                                        &flat[saved[2] as usize * d..][..d],
-                                        &flat[saved[3] as usize * d..][..d],
-                                    )
-                                };
+                                let dists = batch_ref(
+                                    query_slice,
+                                    &flat[saved[0] as usize * d..][..d],
+                                    &flat[saved[1] as usize * d..][..d],
+                                    &flat[saved[2] as usize * d..][..d],
+                                    &flat[saved[3] as usize * d..][..d],
+                                );
 
                                 for k in 0..4 {
                                     let nb_id = saved[k];
