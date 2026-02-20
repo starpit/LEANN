@@ -4,10 +4,10 @@
 //! These test the server routing and response format without starting a full server.
 
 use axum::{
+    Router,
     body::Body,
     http::{Request, StatusCode},
     routing::get,
-    Router,
 };
 use serde_json::Value;
 use tower::ServiceExt; // for `oneshot`

@@ -1145,11 +1145,11 @@ fn cmd_serve(host: &str, port: u16) -> Result<()> {
 
 async fn run_server(host: String, port: u16) -> Result<()> {
     use axum::{
+        Router,
         extract::Path as AxumPath,
         http::StatusCode,
         response::Json,
         routing::{get, post},
-        Router,
     };
     use serde::{Deserialize, Serialize};
 

@@ -46,7 +46,7 @@ impl EmbeddingServerManager {
         };
 
         // Reuse existing server if config matches and process is alive
-        if let (Some(ref mut process), Some(port), Some(ref sig)) =
+        if let (Some(process), Some(port), Some(sig)) =
             (&mut self.process, self.port, &self.config_signature)
         {
             if sig == &new_sig {

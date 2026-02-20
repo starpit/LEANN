@@ -446,7 +446,7 @@ fn parse_python_pickle_offset_map(data: &[u8]) -> Result<HashMap<String, u64>> {
                 if stack.len() >= 3 {
                     let value = stack.pop().unwrap();
                     let key = stack.pop().unwrap();
-                    if let Some(PickleValue::Dict(ref mut d)) = stack.last_mut() {
+                    if let Some(PickleValue::Dict(d)) = stack.last_mut() {
                         if let (PickleValue::Str(k), PickleValue::Int(v)) = (key, value) {
                             d.insert(k, v as u64);
                         }
@@ -457,7 +457,7 @@ fn parse_python_pickle_offset_map(data: &[u8]) -> Result<HashMap<String, u64>> {
                 // SETITEMS: pop pairs from mark to top, insert into dict below mark
                 if let Some(mark_pos) = mark_positions.pop() {
                     let items: Vec<PickleValue> = stack.drain(mark_pos..).collect();
-                    if let Some(PickleValue::Dict(ref mut d)) = stack.last_mut() {
+                    if let Some(PickleValue::Dict(d)) = stack.last_mut() {
                         for chunk in items.chunks(2) {
                             if let [PickleValue::Str(k), PickleValue::Int(v)] = chunk {
                                 d.insert(k.clone(), *v as u64);

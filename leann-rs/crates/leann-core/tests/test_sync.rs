@@ -3,7 +3,7 @@
 //! Tests Merkle tree change detection and FileSynchronizer.
 //! Mirrors Python test_sync.py.
 
-use leann_core::sync::{hash_data, FileSynchronizer, MerkleTree};
+use leann_core::sync::{FileSynchronizer, MerkleTree, hash_data};
 
 /// Merkle tree: identical trees → no changes.
 #[test]

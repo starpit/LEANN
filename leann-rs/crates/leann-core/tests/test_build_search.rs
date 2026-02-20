@@ -5,15 +5,15 @@
 
 mod common;
 
-use common::{build_test_index, sample_documents, FakeEmbeddingProvider};
+use common::{FakeEmbeddingProvider, build_test_index, sample_documents};
+use leann_core::LeannBuilder;
 use leann_core::embedding::EmbeddingProvider;
 use leann_core::hnsw::build::build_hnsw;
 use leann_core::hnsw::graph::HnswConfig;
 use leann_core::hnsw::io::{read_hnsw_index, write_hnsw_compact, write_hnsw_standard};
-use leann_core::hnsw::search::{search_hnsw, SearchParams};
+use leann_core::hnsw::search::{SearchParams, search_hnsw};
 use leann_core::index::{DistanceMetric, IndexMeta, IndexPaths};
-use leann_core::passages::{load_id_map, PassageManager};
-use leann_core::LeannBuilder;
+use leann_core::passages::{PassageManager, load_id_map};
 use ndarray::Array2;
 use std::collections::HashMap;
 use std::io::Cursor;

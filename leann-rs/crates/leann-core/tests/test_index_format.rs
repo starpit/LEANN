@@ -7,7 +7,7 @@ mod common;
 
 use common::build_test_index;
 use leann_core::index::{IndexMeta, IndexPaths};
-use leann_core::passages::{load_id_map, write_id_map, write_passages, Passage, PassageManager};
+use leann_core::passages::{Passage, PassageManager, load_id_map, write_id_map, write_passages};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 

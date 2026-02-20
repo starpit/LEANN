@@ -9,8 +9,8 @@ use rayon::prelude::*;
 use super::graph::*;
 use super::search::{FlatMaxHeap, FlatMinHeap};
 use super::simd::{
-    inner_product_distance, inner_product_distance_batch_4, l2_distance, l2_distance_batch_4,
-    VisitedList,
+    VisitedList, inner_product_distance, inner_product_distance_batch_4, l2_distance,
+    l2_distance_batch_4,
 };
 use crate::index::DistanceMetric;
 
@@ -98,7 +98,7 @@ where
     let mut max_level: i32 = 0;
 
     for _ in 0..n {
-        let r: f64 = rng.gen::<f64>();
+        let r: f64 = rng.r#gen::<f64>();
         let level = (-r.ln() * ml).floor() as i32;
         let level = level.max(0);
         if level > max_level {
@@ -419,7 +419,7 @@ where
     let mut max_level: i32 = 0;
 
     for _ in 0..n {
-        let r: f64 = rng.gen::<f64>();
+        let r: f64 = rng.r#gen::<f64>();
         let level = (-r.ln() * ml).floor() as i32;
         let level = level.max(0);
         if level > max_level {
@@ -760,7 +760,7 @@ fn finalize_graph(
 /// Caller must ensure `id * dim + dim` does not exceed the flat array length.
 #[inline(always)]
 unsafe fn get_flat<'a>(ptr: *const f32, id: usize, dim: usize) -> &'a [f32] {
-    std::slice::from_raw_parts(ptr.add(id * dim), dim)
+    unsafe { std::slice::from_raw_parts(ptr.add(id * dim), dim) }
 }
 
 #[inline(always)]
@@ -1059,7 +1059,7 @@ mod tests {
         let mut rng = rand::thread_rng();
         let n = 100;
         let d = 16;
-        let data_vec: Vec<f32> = (0..n * d).map(|_| rng.gen::<f32>()).collect();
+        let data_vec: Vec<f32> = (0..n * d).map(|_| rng.r#gen::<f32>()).collect();
         let data = Array2::from_shape_vec((n, d), data_vec).unwrap();
 
         let config = HnswConfig {

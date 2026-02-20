@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use ndarray::Array2;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -7,16 +7,16 @@ use std::time::Duration;
 use leann_core::hnsw::build::build_hnsw;
 use leann_core::hnsw::graph::HnswConfig;
 use leann_core::hnsw::io::{read_hnsw_index, write_hnsw_standard};
-use leann_core::hnsw::search::{search_hnsw, search_hnsw_recompute, SearchParams};
+use leann_core::hnsw::search::{SearchParams, search_hnsw, search_hnsw_recompute};
 use leann_core::hnsw::simd::{inner_product_distance, l2_distance, l2_distance_batch_4};
 
 fn gen_vectors(rng: &mut StdRng, n: usize, d: usize) -> Array2<f32> {
-    let data: Vec<f32> = (0..n * d).map(|_| rng.gen::<f32>()).collect();
+    let data: Vec<f32> = (0..n * d).map(|_| rng.r#gen::<f32>()).collect();
     Array2::from_shape_vec((n, d), data).unwrap()
 }
 
 fn gen_query(rng: &mut StdRng, d: usize) -> Vec<f32> {
-    (0..d).map(|_| rng.gen::<f32>()).collect()
+    (0..d).map(|_| rng.r#gen::<f32>()).collect()
 }
 
 // ── Distance computation benchmarks ─────────────────────────────────
@@ -26,8 +26,8 @@ fn bench_distance(c: &mut Criterion) {
     let mut rng = StdRng::seed_from_u64(42);
 
     for dim in [128, 384, 768] {
-        let a: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>()).collect();
-        let b: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>()).collect();
+        let a: Vec<f32> = (0..dim).map(|_| rng.r#gen::<f32>()).collect();
+        let b: Vec<f32> = (0..dim).map(|_| rng.r#gen::<f32>()).collect();
 
         group.bench_with_input(BenchmarkId::new("l2", dim), &dim, |bench, _| {
             bench.iter(|| l2_distance(&a, &b));

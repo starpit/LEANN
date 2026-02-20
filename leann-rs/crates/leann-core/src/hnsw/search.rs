@@ -2,8 +2,8 @@ use std::cmp::Ordering;
 
 use super::graph::*;
 use super::simd::{
-    inner_product_distance, inner_product_distance_batch_4, l2_distance, l2_distance_batch_4,
-    VisitedList,
+    VisitedList, inner_product_distance, inner_product_distance_batch_4, l2_distance,
+    l2_distance_batch_4,
 };
 
 /// Search parameters for HNSW search.
@@ -401,7 +401,7 @@ pub fn search_hnsw_buf(
 #[inline(always)]
 unsafe fn get_vec(vectors: &[f32], id: usize, dim: usize) -> &[f32] {
     debug_assert!(id * dim + dim <= vectors.len());
-    vectors.get_unchecked(id * dim..id * dim + dim)
+    unsafe { vectors.get_unchecked(id * dim..id * dim + dim) }
 }
 
 /// Optimized HNSW search with dual flat-array heaps and batched 4x distance.

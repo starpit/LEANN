@@ -8,10 +8,10 @@ use crate::bm25::BM25Scorer;
 use crate::embedding::client::EmbeddingClient;
 use crate::hnsw::graph::HnswGraph;
 use crate::hnsw::io::read_hnsw_index;
-use crate::hnsw::search::{search_hnsw_recompute, SearchParams};
+use crate::hnsw::search::{SearchParams, search_hnsw_recompute};
 use crate::index::{DistanceMetric, IndexMeta, IndexPaths};
 use crate::metadata_filter::MetadataFilters;
-use crate::passages::{load_id_map, PassageManager};
+use crate::passages::{PassageManager, load_id_map};
 use crate::search_result::SearchResult;
 
 /// High-level searcher for LEANN indexes.

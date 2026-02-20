@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 use tracing::{info, warn};
 
-use crate::chat::{get_llm, LlmConfig, LlmParams, LlmProvider};
+use crate::chat::{LlmConfig, LlmParams, LlmProvider, get_llm};
 use crate::search_result::SearchResult;
 use crate::searcher::LeannSearcher;
 

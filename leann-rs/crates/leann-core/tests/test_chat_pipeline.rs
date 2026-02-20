@@ -6,7 +6,7 @@
 //! Note: Full vector search through LeannChat requires a ZMQ embedding server.
 //! These tests verify the chat construction and SimulatedChat LLM independently.
 
-use leann_core::chat::{get_llm, LlmConfig, LlmParams, LlmProvider, SimulatedChat};
+use leann_core::chat::{LlmConfig, LlmParams, LlmProvider, SimulatedChat, get_llm};
 
 /// SimulatedChat returns a fixed response.
 #[test]

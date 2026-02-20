@@ -11,7 +11,7 @@ use crate::hnsw::graph::{HnswConfig, VectorStorage};
 use crate::hnsw::io::{write_hnsw_compact, write_hnsw_standard};
 use crate::hnsw::simd::normalize_l2_inplace;
 use crate::index::{DistanceMetric, IndexMeta, IndexPaths, PassageSource};
-use crate::passages::{write_id_map, write_passages, Passage};
+use crate::passages::{Passage, write_id_map, write_passages};
 
 /// Builder for creating LEANN indexes.
 pub struct LeannBuilder {

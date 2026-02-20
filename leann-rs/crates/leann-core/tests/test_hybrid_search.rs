@@ -8,11 +8,11 @@
 
 mod common;
 
-use common::{build_test_index, diverse_documents, FakeEmbeddingProvider};
+use common::{FakeEmbeddingProvider, build_test_index, diverse_documents};
+use leann_core::LeannBuilder;
 use leann_core::index::IndexPaths;
 use leann_core::metadata_filter::{FilterSpec, MetadataFilters};
 use leann_core::searcher::{LeannSearcher, SearchConfig};
-use leann_core::LeannBuilder;
 use std::collections::HashMap;
 
 /// Helper: build an index from diverse documents and return a searcher.

@@ -127,10 +127,13 @@ mod tests {
     #[test]
     fn test_resolve_ollama_host_default() {
         // Clear env vars to ensure default
-        env::remove_var("LEANN_LOCAL_LLM_HOST");
-        env::remove_var("LEANN_OLLAMA_HOST");
-        env::remove_var("OLLAMA_HOST");
-        env::remove_var("LOCAL_LLM_ENDPOINT");
+        // SAFETY: This test is not run concurrently with other env-modifying tests
+        unsafe {
+            env::remove_var("LEANN_LOCAL_LLM_HOST");
+            env::remove_var("LEANN_OLLAMA_HOST");
+            env::remove_var("OLLAMA_HOST");
+            env::remove_var("LOCAL_LLM_ENDPOINT");
+        }
         assert_eq!(resolve_ollama_host(None), "http://localhost:11434");
     }
 
