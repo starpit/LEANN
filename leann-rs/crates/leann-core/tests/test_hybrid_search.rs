@@ -10,6 +10,7 @@ mod common;
 
 use common::{build_test_index, diverse_documents, FakeEmbeddingProvider};
 use leann_core::index::IndexPaths;
+use leann_core::metadata_filter::{FilterSpec, MetadataFilters};
 use leann_core::searcher::{LeannSearcher, SearchConfig};
 use leann_core::LeannBuilder;
 use std::collections::HashMap;
@@ -212,5 +213,61 @@ fn test_bm25_with_sample_documents() {
         matching > 0,
         "At least one topic_0 doc should be in top 5: got {:?}",
         top_ids
+    );
+}
+
+/// BM25 search combined with metadata filters.
+/// Tests that metadata_filters in SearchConfig are applied to BM25 results.
+#[test]
+fn test_bm25_search_with_metadata_filters() {
+    let dir = tempfile::tempdir().unwrap();
+    let index_path = build_test_index(100, dir.path(), true, true).unwrap();
+    let searcher = LeannSearcher::open(&index_path).unwrap();
+
+    // BM25 search for "topic_0" with metadata filter: doc_num < 20
+    // topic_0 docs: 0, 5, 10, 15, 20, 25, ..., 95 (20 total)
+    // With filter doc_num < 20, only 0, 5, 10, 15 should remain (4 docs)
+    let mut filters = MetadataFilters::new();
+    let mut spec = FilterSpec::new();
+    spec.insert("<".to_string(), serde_json::json!(20));
+    filters.insert("doc_num".to_string(), spec);
+
+    let config = SearchConfig {
+        gemma: 0.0,
+        metadata_filters: Some(filters),
+        ..Default::default()
+    };
+
+    // Request enough results to get all topic_0 matches
+    let results = searcher
+        .search_with_params("topic_0", 100, &config)
+        .unwrap();
+
+    // All returned results should have doc_num < 20
+    for r in &results {
+        if let Some(doc_num) = r.metadata.get("doc_num") {
+            let num = doc_num.as_i64().unwrap();
+            assert!(
+                num < 20,
+                "Metadata filter doc_num < 20 not applied: got doc_num={}",
+                num
+            );
+        }
+    }
+
+    // Without filters, we should get more results (all 100 docs returned)
+    let config_no_filter = SearchConfig {
+        gemma: 0.0,
+        ..Default::default()
+    };
+    let results_unfiltered = searcher
+        .search_with_params("topic_0", 100, &config_no_filter)
+        .unwrap();
+
+    assert!(
+        results_unfiltered.len() > results.len(),
+        "Unfiltered ({}) should return more results than filtered ({})",
+        results_unfiltered.len(),
+        results.len()
     );
 }

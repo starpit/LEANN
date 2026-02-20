@@ -97,12 +97,20 @@ impl LeannSearcher {
 
         // Handle pure BM25 search
         if config.gemma == 0.0 {
-            return self.bm25_search(query, top_k);
+            let results = self.bm25_search(query, top_k)?;
+            if let Some(ref filters) = config.metadata_filters {
+                return Ok(self.passages.filter_search_results(&results, filters));
+            }
+            return Ok(results);
         }
 
         // Handle grep search
         if config.use_grep {
-            return self.grep_search(query, top_k);
+            let results = self.grep_search(query, top_k)?;
+            if let Some(ref filters) = config.metadata_filters {
+                return Ok(self.passages.filter_search_results(&results, filters));
+            }
+            return Ok(results);
         }
 
         // Vector search requires an embedding client

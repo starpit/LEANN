@@ -199,4 +199,55 @@ mod tests {
         let results = scorer.search("query", 5);
         assert!(results.is_empty());
     }
+
+    #[test]
+    fn test_bm25_single_document_corpus() {
+        let mut scorer = BM25Scorer::default();
+        scorer.fit(&[("0".into(), "the cat sat on the mat".into())]);
+
+        assert!(scorer.is_fitted());
+        assert_eq!(scorer.corpus_size, 1);
+
+        let results = scorer.search("cat", 5);
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0].score > 0.0,
+            "Single doc matching query should have positive score, got {}",
+            results[0].score
+        );
+
+        // Non-matching query should still return the doc but with zero score
+        let results = scorer.search("xyz", 5);
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0].score.abs() < f64::EPSILON,
+            "Non-matching query on single doc should score 0"
+        );
+    }
+
+    #[test]
+    fn test_bm25_repeated_query_terms() {
+        let mut scorer = BM25Scorer::default();
+        scorer.fit(&sample_docs());
+
+        // "cat cat cat" should not crash and should boost cat-containing docs
+        let results_repeated = scorer.search("cat cat cat", 4);
+        let results_single = scorer.search("cat", 4);
+
+        assert_eq!(results_repeated.len(), results_single.len());
+
+        // Same ranking order expected
+        assert_eq!(
+            results_repeated[0].id, results_single[0].id,
+            "Repeated terms should maintain same top result"
+        );
+
+        // Repeated term should produce higher score (term counted multiple times)
+        assert!(
+            results_repeated[0].score >= results_single[0].score,
+            "Repeated term score ({}) should be >= single term score ({})",
+            results_repeated[0].score,
+            results_single[0].score
+        );
+    }
 }

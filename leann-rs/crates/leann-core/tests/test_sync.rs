@@ -141,3 +141,74 @@ fn test_file_synchronizer_detects_modified_file() {
     let has_changes = !added.is_empty() || !removed.is_empty() || !modified.is_empty();
     assert!(has_changes, "Should detect change after modifying a file");
 }
+
+/// Merkle tree: same file path with different content hash → detected as modified.
+/// In compare_with, `data` is the file path identifier and `hash` is the content hash.
+#[test]
+fn test_merkle_tree_detects_modified_file() {
+    let mut tree1 = MerkleTree::new();
+    let root1 = tree1.add_node("root_v1", None, None);
+    // file_a with old content hash
+    tree1.add_node("file_a", Some(&root1), Some("hash_old_content"));
+
+    let mut tree2 = MerkleTree::new();
+    let root2 = tree2.add_node("root_v2", None, None);
+    // file_a with new content hash (same path, different content)
+    tree2.add_node("file_a", Some(&root2), Some("hash_new_content"));
+
+    let (added, removed, modified) = tree1.compare_with(&tree2);
+    assert!(added.is_empty(), "No files should be added: {:?}", added);
+    assert!(
+        removed.is_empty(),
+        "No files should be removed: {:?}",
+        removed
+    );
+    assert!(
+        modified.contains(&"file_a".to_string()),
+        "Should detect file_a as modified, got: {:?}",
+        modified
+    );
+}
+
+/// Merkle tree: add + remove + modify detected simultaneously.
+/// data = file path, hash = content hash.
+#[test]
+fn test_merkle_tree_combined_changes() {
+    // Old tree: file_a (unchanged), file_b (will be removed), file_c (will be modified)
+    let mut tree1 = MerkleTree::new();
+    let root1 = tree1.add_node("root_old", None, None);
+    tree1.add_node("file_a", Some(&root1), Some("hash_a_v1"));
+    tree1.add_node("file_b", Some(&root1), Some("hash_b_v1"));
+    tree1.add_node("file_c", Some(&root1), Some("hash_c_old"));
+
+    // New tree: file_a (unchanged), file_c (modified content), file_d (added)
+    let mut tree2 = MerkleTree::new();
+    let root2 = tree2.add_node("root_new", None, None);
+    tree2.add_node("file_a", Some(&root2), Some("hash_a_v1"));
+    tree2.add_node("file_c", Some(&root2), Some("hash_c_new"));
+    tree2.add_node("file_d", Some(&root2), Some("hash_d_v1"));
+
+    let (added, removed, modified) = tree1.compare_with(&tree2);
+
+    assert!(
+        added.contains(&"file_d".to_string()),
+        "file_d should be added, got added: {:?}",
+        added
+    );
+    assert!(
+        removed.contains(&"file_b".to_string()),
+        "file_b should be removed, got removed: {:?}",
+        removed
+    );
+    // file_a and file_c both exist in both trees → marked as modified
+    assert!(
+        modified.contains(&"file_a".to_string()),
+        "file_a should be in modified (exists in both): {:?}",
+        modified
+    );
+    assert!(
+        modified.contains(&"file_c".to_string()),
+        "file_c should be in modified (exists in both): {:?}",
+        modified
+    );
+}

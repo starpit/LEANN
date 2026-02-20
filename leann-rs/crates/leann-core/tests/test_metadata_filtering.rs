@@ -290,3 +290,57 @@ fn test_filter_missing_field() {
     let filtered = engine.apply_filters(&dicts, &filters);
     assert!(filtered.is_empty(), "Missing field should exclude all");
 }
+
+/// Unknown operator should cause items to be filtered out (returns false).
+#[test]
+fn test_filter_invalid_operator() {
+    let engine = MetadataFilterEngine::new();
+    let dicts = results_to_dicts(&sample_results());
+    let filters = make_filter("genre", "regex", json!("fic.*"));
+    let filtered = engine.apply_filters(&dicts, &filters);
+    assert!(
+        filtered.is_empty(),
+        "Unknown operator should filter out all items, got {} results",
+        filtered.len()
+    );
+}
+
+/// String metadata value compared with numeric operator should work via type coercion.
+/// e.g. field value "2" (string) with < 5 (number) should pass.
+#[test]
+fn test_filter_type_coercion() {
+    let engine = MetadataFilterEngine::new();
+
+    // Create results where the numeric field is stored as a string
+    let mut results = Vec::new();
+    for (i, val_str) in ["1", "3", "7", "10"].iter().enumerate() {
+        let mut map = HashMap::new();
+        map.insert("id".to_string(), json!(format!("doc{}", i)));
+        map.insert("score".to_string(), json!(0.9));
+        map.insert("text".to_string(), json!("text"));
+        map.insert(
+            "metadata".to_string(),
+            json!({ "priority": val_str.to_string() }),
+        );
+        results.push(map);
+    }
+
+    let filters = make_filter("priority", "<", json!(5));
+    let filtered = engine.apply_filters(&results, &filters);
+    assert_eq!(
+        filtered.len(),
+        2,
+        "String '1' and '3' should pass < 5 via coercion, got {:?}",
+        filtered.iter().map(|r| r.get("id")).collect::<Vec<_>>()
+    );
+}
+
+/// Filtering an empty results list should return an empty list.
+#[test]
+fn test_filter_empty_results_list() {
+    let engine = MetadataFilterEngine::new();
+    let empty: Vec<HashMap<String, serde_json::Value>> = vec![];
+    let filters = make_filter("chapter", "==", json!(1));
+    let filtered = engine.apply_filters(&empty, &filters);
+    assert!(filtered.is_empty(), "Filtering empty list should return empty");
+}
