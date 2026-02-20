@@ -90,6 +90,10 @@ uuid = { version = "1", features = ["v4"] }
 # leann crates
 leann-core = { path = "crates/leann-core" }
 
+[workspace.metadata.leann]
+upstream-version = "0.1.0"
+upstream-commit = "1da64a9"
+
 [profile.release]
 opt-level = 3
 lto = "thin"
