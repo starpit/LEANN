@@ -203,9 +203,9 @@ fn search_hnsw_inner<D: Fn(&[f32], &[f32]) -> f32>(
     let d = graph.dimensions;
     let ef = params.ef_search.max(top_k);
 
-    // Safety invariant: vectors.len() >= graph.ntotal * d.
-    // All node IDs from the graph are < graph.ntotal, so get_vec is safe.
-    debug_assert!(vectors.len() >= graph.ntotal * d);
+    // Safety invariants: vectors and visited list are large enough for all node IDs.
+    assert!(vectors.len() >= graph.ntotal * d);
+    assert!(visited.len() >= graph.ntotal);
 
     // Phase 1: Greedy search from top level to level 1
     let mut curr = graph.entry_point as usize;

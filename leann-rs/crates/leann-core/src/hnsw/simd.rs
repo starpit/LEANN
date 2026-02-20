@@ -5,7 +5,7 @@ use ndarray::Array2;
 /// Compute L2 squared distance between two slices.
 #[inline]
 pub fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
-    debug_assert_eq!(a.len(), b.len());
+    assert_eq!(a.len(), b.len());
     #[cfg(target_arch = "aarch64")]
     {
         unsafe { l2_distance_neon(a, b) }
@@ -197,7 +197,7 @@ unsafe fn l2_distance_avx2(a: &[f32], b: &[f32]) -> f32 {
 /// Compute negated inner product distance (lower = more similar).
 #[inline]
 pub fn inner_product_distance(a: &[f32], b: &[f32]) -> f32 {
-    debug_assert_eq!(a.len(), b.len());
+    assert_eq!(a.len(), b.len());
     #[cfg(target_arch = "aarch64")]
     {
         unsafe { inner_product_distance_neon(a, b) }
@@ -411,16 +411,34 @@ impl VisitedList {
         }
     }
 
-    /// Mark a node as visited.
+    /// Number of nodes this visited list can track.
     #[inline]
+    pub fn len(&self) -> usize {
+        self.visited.len()
+    }
+
+    /// Mark a node as visited.
+    ///
+    /// # Safety
+    /// Caller must ensure `node < self.len()`. Use the assert at search
+    /// entry points to establish this invariant for all graph node IDs.
+    #[inline(always)]
     pub fn set(&mut self, node: usize) {
-        self.visited[node] = self.generation;
+        debug_assert!(node < self.visited.len());
+        unsafe {
+            *self.visited.get_unchecked_mut(node) = self.generation;
+        }
     }
 
     /// Check if a node has been visited in the current generation.
-    #[inline]
+    ///
+    /// # Safety
+    /// Caller must ensure `node < self.len()`. Use the assert at search
+    /// entry points to establish this invariant for all graph node IDs.
+    #[inline(always)]
     pub fn is_visited(&self, node: usize) -> bool {
-        self.visited[node] == self.generation
+        debug_assert!(node < self.visited.len());
+        unsafe { *self.visited.get_unchecked(node) == self.generation }
     }
 }
 
