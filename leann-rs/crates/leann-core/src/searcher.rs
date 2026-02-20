@@ -139,20 +139,34 @@ impl LeannSearcher {
         // Search
         let (labels, distances) = if self.recompute_embeddings {
             let client = EmbeddingClient::new(zmq_port);
-            search_hnsw_recompute(&self.graph, &query_vec, top_k, &params, |node_ids, q| {
-                client
-                    .compute_distances(node_ids, q)
-                    .unwrap_or_else(|_| vec![1e9; node_ids.len()])
-            })
+            search_hnsw_recompute(
+                &self.graph,
+                &query_vec,
+                top_k,
+                &params,
+                |node_ids, q, out| {
+                    let dists = client
+                        .compute_distances(node_ids, q)
+                        .unwrap_or_else(|_| vec![1e9; node_ids.len()]);
+                    out[..dists.len()].copy_from_slice(&dists);
+                },
+            )
         } else {
             // Non-recompute: we'd need stored vectors
             // For now, fall back to recompute
             let client = EmbeddingClient::new(zmq_port);
-            search_hnsw_recompute(&self.graph, &query_vec, top_k, &params, |node_ids, q| {
-                client
-                    .compute_distances(node_ids, q)
-                    .unwrap_or_else(|_| vec![1e9; node_ids.len()])
-            })
+            search_hnsw_recompute(
+                &self.graph,
+                &query_vec,
+                top_k,
+                &params,
+                |node_ids, q, out| {
+                    let dists = client
+                        .compute_distances(node_ids, q)
+                        .unwrap_or_else(|_| vec![1e9; node_ids.len()]);
+                    out[..dists.len()].copy_from_slice(&dists);
+                },
+            )
         };
 
         // Map labels to string IDs and enrich with passages

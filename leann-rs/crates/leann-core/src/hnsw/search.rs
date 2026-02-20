@@ -523,8 +523,10 @@ where
 
 /// Search the HNSW graph using recomputed distances via a callback.
 ///
-/// The `compute_distance` callback takes (node_ids, query) and returns distances.
-/// This is used when vectors are not stored locally and must be recomputed on the fly.
+/// The `compute_distance` callback takes `(node_ids, query, out)` and writes
+/// distances into the pre-allocated `out` slice. This avoids Vec allocation
+/// per callback invocation. The callback should use `l2_distance_batch_4`
+/// (or similar) internally to batch-compute distances with SIMD.
 pub fn search_hnsw_recompute<F>(
     graph: &HnswGraph,
     query: &[f32],
@@ -533,13 +535,14 @@ pub fn search_hnsw_recompute<F>(
     mut compute_distance: F,
 ) -> (Vec<usize>, Vec<f32>)
 where
-    F: FnMut(&[usize], &[f32]) -> Vec<f32>,
+    F: FnMut(&[usize], &[f32], &mut [f32]),
 {
     let ef = params.ef_search.max(top_k);
     let max_neighbors = graph.neighbors_at_level(0);
 
     // Pre-allocate scratch buffers reused across iterations
     let mut node_buf = Vec::with_capacity(max_neighbors + 1);
+    let mut dist_buf = vec![0.0f32; max_neighbors + 1];
 
     // Phase 1: Greedy search from top level to level 1
     let mut curr = graph.entry_point as usize;
@@ -560,16 +563,12 @@ where
             }
 
             node_buf.push(curr);
-            let distances = compute_distance(&node_buf, query);
-            assert!(distances.len() >= node_buf.len());
+            let n = node_buf.len();
+            compute_distance(&node_buf, query, &mut dist_buf[..n]);
 
-            let curr_dist = distances[node_buf.len() - 1];
-            for (&d_nb, &nb) in distances
-                .iter()
-                .zip(node_buf.iter())
-                .take(node_buf.len() - 1)
-            {
-                if d_nb < curr_dist {
+            let curr_dist = dist_buf[n - 1];
+            for (i, &nb) in node_buf.iter().enumerate().take(n - 1) {
+                if dist_buf[i] < curr_dist {
                     curr = nb;
                     changed = true;
                 }
@@ -586,8 +585,10 @@ where
     let mut visited = VisitedList::new(graph.ntotal);
     visited.reset();
 
-    let entry_dists = compute_distance(&[curr], query);
-    let d_entry = entry_dists[0];
+    node_buf.clear();
+    node_buf.push(curr);
+    compute_distance(&node_buf, query, &mut dist_buf[..1]);
+    let d_entry = dist_buf[0];
     candidates.push(d_entry, curr as u32);
     results.push(d_entry, curr as u32);
     visited.set(curr);
@@ -617,19 +618,22 @@ where
             continue;
         }
 
-        let distances = compute_distance(&node_buf, query);
-        let distances = &distances[..node_buf.len()];
+        let n = node_buf.len();
+        compute_distance(&node_buf, query, &mut dist_buf[..n]);
 
-        for (&d_nb, &nb) in distances.iter().zip(node_buf.iter()) {
+        for i in 0..n {
+            let d_nb = dist_buf[i];
+            let nb = node_buf[i] as u32;
+
             if results.len() < ef {
-                candidates.push(d_nb, nb as u32);
-                results.push(d_nb, nb as u32);
+                candidates.push(d_nb, nb);
+                results.push(d_nb, nb);
                 if results.len() == ef {
                     worst_dist = results.peek_max_dis();
                 }
             } else if d_nb < worst_dist {
-                candidates.push(d_nb, nb as u32);
-                results.replace_max(d_nb, nb as u32);
+                candidates.push(d_nb, nb);
+                results.replace_max(d_nb, nb);
                 worst_dist = results.peek_max_dis();
             }
         }
@@ -713,17 +717,15 @@ mod tests {
         };
 
         let (labels, distances) =
-            search_hnsw_recompute(&graph, &query, 2, &params, |node_ids, q| {
-                node_ids
-                    .iter()
-                    .map(|&id| {
-                        let vec = &flat_vectors[id * d..(id + 1) * d];
-                        vec.iter()
-                            .zip(q.iter())
-                            .map(|(a, b)| (a - b) * (a - b))
-                            .sum()
-                    })
-                    .collect()
+            search_hnsw_recompute(&graph, &query, 2, &params, |node_ids, q, out| {
+                for (i, &id) in node_ids.iter().enumerate() {
+                    let vec = &flat_vectors[id * d..(id + 1) * d];
+                    out[i] = vec
+                        .iter()
+                        .zip(q.iter())
+                        .map(|(a, b)| (a - b) * (a - b))
+                        .sum();
+                }
             });
 
         assert_eq!(labels.len(), 2);

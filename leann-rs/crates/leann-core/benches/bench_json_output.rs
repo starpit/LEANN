@@ -19,7 +19,7 @@ use leann_core::hnsw::io::{read_hnsw_index, write_hnsw_standard};
 use leann_core::hnsw::search::{
     search_hnsw, search_hnsw_buf, search_hnsw_recompute, SearchBuffers, SearchParams,
 };
-use leann_core::hnsw::simd::{inner_product_distance, l2_distance};
+use leann_core::hnsw::simd::{inner_product_distance, l2_distance, l2_distance_batch_4};
 
 fn gen_vectors(rng: &mut StdRng, n: usize, d: usize) -> Array2<f32> {
     let data: Vec<f32> = (0..n * d).map(|_| rng.gen::<f32>()).collect();
@@ -243,15 +243,29 @@ fn main() {
             let flat_ref = &flat_vectors;
             let (med, mean) = bench_fn(
                 || {
-                    let _ = search_hnsw_recompute(&graph, &query, top_k, &params, |node_ids, q| {
-                        node_ids
-                            .iter()
-                            .map(|&id| {
-                                let vec = &flat_ref[id * d..(id + 1) * d];
-                                l2_distance(vec, q)
-                            })
-                            .collect()
-                    });
+                    let _ =
+                        search_hnsw_recompute(&graph, &query, top_k, &params, |node_ids, q, out| {
+                            let n = node_ids.len();
+                            let mut i = 0;
+                            while i + 4 <= n {
+                                let dists = l2_distance_batch_4(
+                                    q,
+                                    &flat_ref[node_ids[i] * d..(node_ids[i] + 1) * d],
+                                    &flat_ref[node_ids[i + 1] * d..(node_ids[i + 1] + 1) * d],
+                                    &flat_ref[node_ids[i + 2] * d..(node_ids[i + 2] + 1) * d],
+                                    &flat_ref[node_ids[i + 3] * d..(node_ids[i + 3] + 1) * d],
+                                );
+                                out[i..i + 4].copy_from_slice(&dists);
+                                i += 4;
+                            }
+                            while i < n {
+                                out[i] = l2_distance(
+                                    &flat_ref[node_ids[i] * d..(node_ids[i] + 1) * d],
+                                    q,
+                                );
+                                i += 1;
+                            }
+                        });
                 },
                 100,
                 1000,
