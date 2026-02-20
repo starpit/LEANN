@@ -85,6 +85,7 @@ where
     // Pre-flatten data to avoid per-call data.row().as_slice() overhead.
     let flat: Vec<f32> = data.iter().copied().collect();
     assert!(flat.len() >= n * d);
+    let flat_ptr = flat.as_ptr();
 
     // Compute level assignment probabilities
     let m = config.m;
@@ -144,11 +145,15 @@ where
 
     // Pre-allocate reusable flat heaps (matching FAISS's search_neighbors_to_add)
     let ef = config.ef_construction;
-    let mut candidates = FlatMinHeap::new(ef * 2 * m);
-    let mut results = FlatMaxHeap::new(ef);
+    let mut candidates = FlatMinHeap::new(ef * 2);
+    let mut results = FlatMaxHeap::new(ef + 1);
 
-    // Scratch buffer for batching 4 unvisited neighbors
+    // Scratch buffers
     let mut saved: [u32; 4] = [0; 4];
+    let mut result_vec: Vec<(f32, u32)> = Vec::with_capacity(ef);
+    let mut shrink_out: Vec<(f32, u32)> = Vec::with_capacity(2 * m);
+    let mut link_scratch: Vec<(f32, u32)> = Vec::with_capacity(2 * m + 1);
+    let mut link_shrink: Vec<(f32, u32)> = Vec::with_capacity(2 * m);
 
     for i in 0..n {
         let node_level = levels[i] - 1; // max level for this node
@@ -158,12 +163,12 @@ where
             continue;
         }
 
-        let query_slice = &flat[i * d..][..d];
+        let query_slice = unsafe { get_flat(flat_ptr, i, d) };
 
         // Phase 1: Traverse from top level down to node_level+1 (greedy search to find entry point)
         let mut curr_entry = entry_point as usize;
         for level in (node_level as usize + 1..=max_level as usize).rev() {
-            let mut d_curr = dist_fn(query_slice, &flat[curr_entry * d..][..d]);
+            let mut d_curr = dist_fn(query_slice, unsafe { get_flat(flat_ptr, curr_entry, d) });
             loop {
                 let mut changed = false;
                 let neighbor_slice = get_neighbors_mut_slice(
@@ -178,7 +183,7 @@ where
                         continue;
                     }
                     let nb = nb as usize;
-                    let d_nb = dist_fn(query_slice, &flat[nb * d..][..d]);
+                    let d_nb = dist_fn(query_slice, unsafe { get_flat(flat_ptr, nb, d) });
                     if d_nb < d_curr {
                         curr_entry = nb;
                         d_curr = d_nb;
@@ -193,7 +198,7 @@ where
 
         // Phase 2: For each level from min(node_level, max_level) down to 0,
         // search for ef_construction nearest neighbors, then connect.
-        // Uses FAISS-style bounded max-heap + batch_4 distance.
+        // FAISS-style: conditional candidate push + diversity pruning.
         for level in (0..=node_level as usize).rev() {
             let max_neighbors = if level == 0 { 2 * m } else { m };
 
@@ -203,20 +208,21 @@ where
             visited.reset();
             visited.set(i);
 
-            let d_entry = dist_fn(query_slice, &flat[curr_entry * d..][..d]);
+            let d_entry = dist_fn(query_slice, unsafe { get_flat(flat_ptr, curr_entry, d) });
             candidates.push(d_entry, curr_entry as u32);
             results.push(d_entry, curr_entry as u32);
             visited.set(curr_entry);
 
             while !candidates.is_empty() {
-                let (cand_dist, cand_id) = candidates.pop();
+                let (cand_dist, _cand_id) = candidates.peek();
 
                 // FAISS termination: stop when best candidate > worst result
                 if cand_dist > results.peek_max_dis() {
                     break;
                 }
+                let (_cand_dist, cand_id) = candidates.pop();
 
-                // Explore neighbors with batch_4 distance
+                // Explore neighbors with prefetch + batch_4 distance
                 let nb_slice = get_neighbors_mut_slice(
                     &neighbors,
                     &offsets,
@@ -225,6 +231,13 @@ where
                     level,
                 );
 
+                // Pass 1: prefetch visited table entries
+                for &nb in nb_slice {
+                    if nb < 0 { break; }
+                    visited.prefetch(nb as usize);
+                }
+
+                // Pass 2: check visited + batch distance
                 let mut counter = 0;
                 for &nb in nb_slice {
                     if nb < 0 {
@@ -238,23 +251,26 @@ where
                     counter += 1;
 
                     if counter == 4 {
-                        let dists = dist_batch_4(
+                        let dists = unsafe {
+                            dist_batch_4(
                                 query_slice,
-                                &flat[saved[0] as usize * d..][..d],
-                                &flat[saved[1] as usize * d..][..d],
-                                &flat[saved[2] as usize * d..][..d],
-                                &flat[saved[3] as usize * d..][..d],
-                        );
+                                get_flat(flat_ptr, saved[0] as usize, d),
+                                get_flat(flat_ptr, saved[1] as usize, d),
+                                get_flat(flat_ptr, saved[2] as usize, d),
+                                get_flat(flat_ptr, saved[3] as usize, d),
+                            )
+                        };
 
                         for k in 0..4 {
                             let nb_id = saved[k];
                             let d_nb = dists[k];
-                            if results.len() < ef {
+                            // FAISS-style: conditional push to both heaps
+                            if results.len() < ef || d_nb < results.peek_max_dis() {
                                 candidates.push(d_nb, nb_id);
                                 results.push(d_nb, nb_id);
-                            } else if d_nb < results.peek_max_dis() {
-                                candidates.push(d_nb, nb_id);
-                                results.replace_max(d_nb, nb_id);
+                                if results.len() > ef {
+                                    results.pop_max();
+                                }
                             }
                         }
                         counter = 0;
@@ -264,53 +280,53 @@ where
                 // Process remainder (1-3 leftover neighbors)
                 for k in 0..counter {
                     let nb_id = saved[k];
-                    let d_nb = dist_fn(query_slice, &flat[nb_id as usize * d..][..d]);
-                    if results.len() < ef {
+                    let d_nb = dist_fn(query_slice, unsafe { get_flat(flat_ptr, nb_id as usize, d) });
+                    if results.len() < ef || d_nb < results.peek_max_dis() {
                         candidates.push(d_nb, nb_id);
                         results.push(d_nb, nb_id);
-                    } else if d_nb < results.peek_max_dis() {
-                        candidates.push(d_nb, nb_id);
-                        results.replace_max(d_nb, nb_id);
+                        if results.len() > ef {
+                            results.pop_max();
+                        }
                     }
                 }
             }
 
-            // Extract top max_neighbors from the bounded results heap
-            // Pop all from max-heap into a vec, sort, take top max_neighbors
-            let mut result_vec: Vec<(f32, u32)> = Vec::with_capacity(results.len());
+            // Extract results sorted by ascending distance for shrink_neighbor_list
+            result_vec.clear();
             while results.len() > 0 {
-                let (d, id) = results.pop_max();
-                result_vec.push((d, id));
+                let (dd, id) = results.pop_max();
+                result_vec.push((dd, id));
             }
-            result_vec.sort_unstable_by(|a, b| {
-                a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
-            });
-            result_vec.truncate(max_neighbors);
+            result_vec.reverse(); // now ascending distance (closest first)
 
-            // Connect node i to its neighbors at this level
-            let neighbors_range = get_neighbor_range(&offsets, &cum_nneighbor_per_level, i, level);
-            for (slot, &(_, id)) in neighbors_range.zip(result_vec.iter()) {
+            // FAISS-style diversity pruning: select diverse neighbors
+            shrink_neighbor_list(&result_vec, &mut shrink_out, max_neighbors, flat_ptr, d, &dist_fn);
+
+            // Forward connections: write selected neighbors to node i's slots
+            let fwd_range = get_neighbor_range(&offsets, &cum_nneighbor_per_level, i, level);
+            for (slot, &(_, id)) in fwd_range.zip(shrink_out.iter()) {
                 neighbors[slot] = id as i32;
             }
 
-            // Add reverse connections
-            for &(_, id) in &result_vec {
-                add_reverse_connection(
+            // Reverse connections via add_link (with diversity pruning)
+            for &(_, id) in shrink_out.iter() {
+                add_link(
                     &mut neighbors,
                     &offsets,
                     &cum_nneighbor_per_level,
                     id as usize,
                     i as i32,
                     level,
-                    max_neighbors,
-                    &flat,
+                    flat_ptr,
                     d,
                     &dist_fn,
+                    &mut link_scratch,
+                    &mut link_shrink,
                 );
             }
 
-            if !result_vec.is_empty() {
-                curr_entry = result_vec[0].1 as usize;
+            if !shrink_out.is_empty() {
+                curr_entry = shrink_out[0].1 as usize;
             }
         }
 
@@ -381,6 +397,9 @@ where
     // Pre-flatten data to avoid per-call data.row().as_slice() overhead.
     let flat: Vec<f32> = data.iter().copied().collect();
     assert!(flat.len() >= n * d);
+    // Store base address as usize so it's Send+Sync for rayon closures.
+    // Safety: flat lives until after pool.install() returns.
+    let flat_addr = flat.as_ptr() as usize;
 
     // Assign levels (sequential, fast)
     let mut rng = rand::thread_rng();
@@ -440,19 +459,24 @@ where
             || {
                 (
                     VisitedList::new(n),
-                    FlatMinHeap::new(ef * 2 * m),
-                    FlatMaxHeap::new(ef),
+                    FlatMinHeap::new(ef * 2),
+                    FlatMaxHeap::new(ef + 1),
+                    Vec::<(f32, u32)>::with_capacity(ef),
+                    Vec::<(f32, u32)>::with_capacity(2 * m),  // shrink_out
+                    Vec::<(f32, u32)>::with_capacity(2 * m + 1),  // link_scratch
+                    Vec::<(f32, u32)>::with_capacity(2 * m),  // link_shrink
                 )
             },
-            |(visited, candidates, results), i| {
+            |(visited, candidates, results, result_vec, shrink_out, link_scratch, link_shrink), i| {
+                let flat_ptr = flat_addr as *const f32;
                 let node_level = levels[i] - 1;
 
-                let query_slice = &flat[i * d..][..d];
+                let query_slice = unsafe { get_flat(flat_ptr, i, d) };
 
                 // Phase 1: greedy descent from top level to node_level+1
                 let mut curr_entry = entry_point.load(AtomicOrdering::Relaxed) as usize;
                 for level in (node_level as usize + 1..=max_level as usize).rev() {
-                    let mut d_curr = dist_ref(query_slice, &flat[curr_entry * d..][..d]);
+                    let mut d_curr = dist_ref(query_slice, unsafe { get_flat(flat_ptr, curr_entry, d) });
                     loop {
                         let mut changed = false;
                         let nb_slice = get_neighbors_atomic_slice(
@@ -468,7 +492,7 @@ where
                                 continue;
                             }
                             let nb = nb as usize;
-                            let d_nb = dist_ref(query_slice, &flat[nb * d..][..d]);
+                            let d_nb = dist_ref(query_slice, unsafe { get_flat(flat_ptr, nb, d) });
                             if d_nb < d_curr {
                                 curr_entry = nb;
                                 d_curr = d_nb;
@@ -482,7 +506,7 @@ where
                 }
 
                 // Phase 2: search & connect at each level from node_level down to 0
-                // Uses FAISS-style bounded max-heap + batch_4 distance.
+                // FAISS-style: conditional candidate push + diversity pruning.
                 let mut saved: [u32; 4] = [0; 4];
 
                 for level in (0..=node_level as usize).rev() {
@@ -493,17 +517,18 @@ where
                     visited.reset();
                     visited.set(i);
 
-                    let d_entry = dist_ref(query_slice, &flat[curr_entry * d..][..d]);
+                    let d_entry = dist_ref(query_slice, unsafe { get_flat(flat_ptr, curr_entry, d) });
                     candidates.push(d_entry, curr_entry as u32);
                     results.push(d_entry, curr_entry as u32);
                     visited.set(curr_entry);
 
                     while !candidates.is_empty() {
-                        let (cand_dist, cand_id) = candidates.pop();
+                        let (cand_dist, _) = candidates.peek();
 
                         if cand_dist > results.peek_max_dis() {
                             break;
                         }
+                        let (_cand_dist, cand_id) = candidates.pop();
 
                         let nb_slice = get_neighbors_atomic_slice(
                             &neighbors,
@@ -513,6 +538,14 @@ where
                             level,
                         );
 
+                        // Pass 1: prefetch visited table entries
+                        for atom in nb_slice {
+                            let nb = atom.load(AtomicOrdering::Relaxed);
+                            if nb < 0 { break; }
+                            visited.prefetch(nb as usize);
+                        }
+
+                        // Pass 2: check visited + batch distance
                         let mut counter = 0;
                         for atom in nb_slice {
                             let nb = atom.load(AtomicOrdering::Relaxed);
@@ -527,23 +560,25 @@ where
                             counter += 1;
 
                             if counter == 4 {
-                                let dists = batch_ref(
-                                    query_slice,
-                                    &flat[saved[0] as usize * d..][..d],
-                                    &flat[saved[1] as usize * d..][..d],
-                                    &flat[saved[2] as usize * d..][..d],
-                                    &flat[saved[3] as usize * d..][..d],
-                                );
+                                let dists = unsafe {
+                                    batch_ref(
+                                        query_slice,
+                                        get_flat(flat_ptr, saved[0] as usize, d),
+                                        get_flat(flat_ptr, saved[1] as usize, d),
+                                        get_flat(flat_ptr, saved[2] as usize, d),
+                                        get_flat(flat_ptr, saved[3] as usize, d),
+                                    )
+                                };
 
                                 for k in 0..4 {
                                     let nb_id = saved[k];
                                     let d_nb = dists[k];
-                                    if results.len() < ef {
+                                    if results.len() < ef || d_nb < results.peek_max_dis() {
                                         candidates.push(d_nb, nb_id);
                                         results.push(d_nb, nb_id);
-                                    } else if d_nb < results.peek_max_dis() {
-                                        candidates.push(d_nb, nb_id);
-                                        results.replace_max(d_nb, nb_id);
+                                        if results.len() > ef {
+                                            results.pop_max();
+                                        }
                                     }
                                 }
                                 counter = 0;
@@ -554,53 +589,54 @@ where
                         for k in 0..counter {
                             let nb_id = saved[k];
                             let d_nb =
-                                dist_ref(query_slice, &flat[nb_id as usize * d..][..d]);
-                            if results.len() < ef {
+                                dist_ref(query_slice, unsafe { get_flat(flat_ptr, nb_id as usize, d) });
+                            if results.len() < ef || d_nb < results.peek_max_dis() {
                                 candidates.push(d_nb, nb_id);
                                 results.push(d_nb, nb_id);
-                            } else if d_nb < results.peek_max_dis() {
-                                candidates.push(d_nb, nb_id);
-                                results.replace_max(d_nb, nb_id);
+                                if results.len() > ef {
+                                    results.pop_max();
+                                }
                             }
                         }
                     }
 
-                    // Extract top max_neighbors from bounded results heap
-                    let mut result_vec: Vec<(f32, u32)> =
-                        Vec::with_capacity(results.len());
+                    // Extract results sorted ascending for shrink_neighbor_list
+                    result_vec.clear();
                     while results.len() > 0 {
                         let (dd, id) = results.pop_max();
                         result_vec.push((dd, id));
                     }
-                    result_vec.sort_unstable_by(|a, b| {
-                        a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
-                    });
-                    result_vec.truncate(max_neighbors);
+                    result_vec.reverse();
+
+                    // FAISS-style diversity pruning
+                    shrink_neighbor_list(result_vec, shrink_out, max_neighbors, flat_ptr, d, dist_ref);
 
                     // Forward connections: only this thread writes to node i's slots
                     let range =
                         get_neighbor_range(&offsets, &cum_nneighbor_per_level, i, level);
-                    for (slot, &(_, id)) in range.zip(result_vec.iter()) {
+                    for (slot, &(_, id)) in range.zip(shrink_out.iter()) {
                         neighbors[slot].store(id as i32, AtomicOrdering::Relaxed);
                     }
 
-                    // Reverse connections via CAS
-                    for &(_, id) in result_vec.iter() {
-                        add_reverse_connection_atomic(
+                    // Reverse connections via add_link_atomic (with diversity pruning)
+                    for &(_, id) in shrink_out.iter() {
+                        add_link_atomic(
                             &neighbors,
                             &offsets,
                             &cum_nneighbor_per_level,
                             id as usize,
                             i as i32,
                             level,
-                            &flat,
+                            flat_ptr,
                             d,
                             dist_ref,
+                            link_scratch,
+                            link_shrink,
                         );
                     }
 
-                    if !result_vec.is_empty() {
-                        curr_entry = result_vec[0].1 as usize;
+                    if !shrink_out.is_empty() {
+                        curr_entry = shrink_out[0].1 as usize;
                     }
                 }
 
@@ -691,8 +727,17 @@ fn finalize_graph(
 }
 
 // ---------------------------------------------------------------------------
-// Helper functions for neighbor access
+// Helper functions for neighbor and vector access
 // ---------------------------------------------------------------------------
+
+/// Get a vector slice from a raw pointer without bounds checking.
+///
+/// # Safety
+/// Caller must ensure `id * dim + dim` does not exceed the flat array length.
+#[inline(always)]
+unsafe fn get_flat<'a>(ptr: *const f32, id: usize, dim: usize) -> &'a [f32] {
+    std::slice::from_raw_parts(ptr.add(id * dim), dim)
+}
 
 #[inline(always)]
 fn get_neighbor_range(
@@ -744,73 +789,132 @@ fn get_neighbors_atomic_slice<'a>(
     }
 }
 
-fn add_reverse_connection<D: Fn(&[f32], &[f32]) -> f32>(
+/// FAISS-style diversity-aware neighbor pruning.
+///
+/// From a list of candidates sorted by ascending distance, selects up to
+/// `max_size` neighbors that cover diverse directions. A candidate is rejected
+/// if it is closer to an already-selected neighbor than to the query node.
+///
+/// `candidates` must be sorted by ascending distance (closest first).
+/// Results are written into `output` (cleared first).
+#[inline]
+fn shrink_neighbor_list<D: Fn(&[f32], &[f32]) -> f32>(
+    candidates: &[(f32, u32)],
+    output: &mut Vec<(f32, u32)>,
+    max_size: usize,
+    flat_ptr: *const f32,
+    dim: usize,
+    dist_fn: &D,
+) {
+    output.clear();
+    for &(dist_to_query, cand_id) in candidates {
+        let mut good = true;
+        let cand_vec = unsafe { get_flat(flat_ptr, cand_id as usize, dim) };
+        for &(_, selected_id) in output.iter() {
+            let dist_to_selected =
+                dist_fn(cand_vec, unsafe { get_flat(flat_ptr, selected_id as usize, dim) });
+            if dist_to_selected < dist_to_query {
+                good = false;
+                break;
+            }
+        }
+        if good {
+            output.push((dist_to_query, cand_id));
+            if output.len() >= max_size {
+                return;
+            }
+        }
+    }
+}
+
+/// FAISS-style add_link: add a reverse connection with diversity pruning.
+///
+/// If there's an empty slot, just insert. If full, rebuild the entire
+/// neighbor list using `shrink_neighbor_list` with the new link included.
+fn add_link<D: Fn(&[f32], &[f32]) -> f32>(
     neighbors: &mut [i32],
     offsets: &[u64],
     cum_nn: &[i32],
     target: usize,
     source: i32,
     level: usize,
-    _max_neighbors: usize,
-    flat: &[f32],
+    flat_ptr: *const f32,
     dim: usize,
     dist_fn: &D,
+    scratch: &mut Vec<(f32, u32)>,
+    shrink_out: &mut Vec<(f32, u32)>,
 ) {
     let range = get_neighbor_range(offsets, cum_nn, target, level);
     if range.end > neighbors.len() {
         return;
     }
+    let max_neighbors = range.end - range.start;
 
-    // Find an empty slot
+    // Check for empty slot (scan from end, matching FAISS)
+    if range.end > range.start && neighbors[range.end - 1] == -1 {
+        let mut i = range.end;
+        while i > range.start && neighbors[i - 1] == -1 {
+            i -= 1;
+        }
+        neighbors[i] = source;
+        return;
+    }
+
+    // All slots full — rebuild with diversity pruning
+    let target_vec = unsafe { get_flat(flat_ptr, target, dim) };
+
+    // Collect all current neighbors + new source into scratch, sorted by distance
+    scratch.clear();
+    let source_dist = dist_fn(target_vec, unsafe { get_flat(flat_ptr, source as usize, dim) });
+    scratch.push((source_dist, source as u32));
     for idx in range.clone() {
-        if neighbors[idx] < 0 {
-            neighbors[idx] = source;
-            return;
-        }
-    }
-
-    // All slots full - replace the worst neighbor if the new one is better
-    let target_slice = &flat[target * dim..][..dim];
-    let source_dist = dist_fn(target_slice, &flat[source as usize * dim..][..dim]);
-
-    let mut worst_idx = range.start;
-    let mut worst_dist = f32::NEG_INFINITY;
-
-    for idx in range {
         let nb = neighbors[idx];
-        if nb < 0 {
-            continue;
-        }
-        let d = dist_fn(target_slice, &flat[nb as usize * dim..][..dim]);
-        if d > worst_dist {
-            worst_dist = d;
-            worst_idx = idx;
+        if nb >= 0 {
+            let d = dist_fn(target_vec, unsafe { get_flat(flat_ptr, nb as usize, dim) });
+            scratch.push((d, nb as u32));
         }
     }
+    scratch.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-    if source_dist < worst_dist {
-        neighbors[worst_idx] = source;
+    // Select diverse neighbors
+    shrink_neighbor_list(scratch, shrink_out, max_neighbors, flat_ptr, dim, dist_fn);
+
+    // Write back
+    let mut i = range.start;
+    for &(_, id) in shrink_out.iter() {
+        neighbors[i] = id as i32;
+        i += 1;
+    }
+    // Clear remaining slots
+    while i < range.end {
+        neighbors[i] = -1;
+        i += 1;
     }
 }
 
-/// Lock-free reverse connection using CAS (parallel path).
-/// Empty slot: CAS(-1, source). Replace worst: single CAS attempt — if lost, give up.
-/// HNSW is robust to slight suboptimality from lost races.
-fn add_reverse_connection_atomic<D: Fn(&[f32], &[f32]) -> f32>(
+/// Lock-free add_link with diversity pruning (parallel path).
+///
+/// If there's an empty slot, CAS to claim it. Otherwise, snapshot all current
+/// neighbors, run shrink_neighbor_list with the new source included, and
+/// write back via CAS. Lost races are tolerated — HNSW is robust to them.
+fn add_link_atomic<D: Fn(&[f32], &[f32]) -> f32>(
     neighbors: &[AtomicI32],
     offsets: &[u64],
     cum_nn: &[i32],
     target: usize,
     source: i32,
     level: usize,
-    flat: &[f32],
+    flat_ptr: *const f32,
     dim: usize,
     dist_fn: &D,
+    scratch: &mut Vec<(f32, u32)>,
+    shrink_out: &mut Vec<(f32, u32)>,
 ) {
     let range = get_neighbor_range(offsets, cum_nn, target, level);
     if range.end > neighbors.len() {
         return;
     }
+    let max_neighbors = range.end - range.start;
 
     // Try to claim an empty slot via CAS
     for idx in range.clone() {
@@ -822,42 +926,34 @@ fn add_reverse_connection_atomic<D: Fn(&[f32], &[f32]) -> f32>(
         }
     }
 
-    // All slots occupied — try to replace the worst neighbor
-    let target_slice = &flat[target * dim..][..dim];
-    let source_dist = dist_fn(target_slice, &flat[source as usize * dim..][..dim]);
+    // All slots occupied — rebuild with diversity pruning
+    let target_vec = unsafe { get_flat(flat_ptr, target, dim) };
 
-    let mut worst_idx = range.start;
-    let mut worst_dist = f32::NEG_INFINITY;
-    let mut worst_val = -1i32;
-
-    for idx in range {
+    // Snapshot current neighbors + source into scratch, sorted by distance
+    scratch.clear();
+    let source_dist = dist_fn(target_vec, unsafe { get_flat(flat_ptr, source as usize, dim) });
+    scratch.push((source_dist, source as u32));
+    for idx in range.clone() {
         let nb = neighbors[idx].load(AtomicOrdering::Relaxed);
-        if nb < 0 {
-            // Slot freed by another thread — try to claim it
-            if neighbors[idx]
-                .compare_exchange(-1, source, AtomicOrdering::Relaxed, AtomicOrdering::Relaxed)
-                .is_ok()
-            {
-                return;
-            }
-            continue;
-        }
-        let d = dist_fn(target_slice, &flat[nb as usize * dim..][..dim]);
-        if d > worst_dist {
-            worst_dist = d;
-            worst_idx = idx;
-            worst_val = nb;
+        if nb >= 0 {
+            let d = dist_fn(target_vec, unsafe { get_flat(flat_ptr, nb as usize, dim) });
+            scratch.push((d, nb as u32));
         }
     }
+    scratch.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-    if source_dist < worst_dist && worst_val >= 0 {
-        // Single CAS attempt — if another thread changed the slot, give up
-        let _ = neighbors[worst_idx].compare_exchange(
-            worst_val,
-            source,
-            AtomicOrdering::Relaxed,
-            AtomicOrdering::Relaxed,
-        );
+    // Select diverse neighbors
+    shrink_neighbor_list(scratch, shrink_out, max_neighbors, flat_ptr, dim, dist_fn);
+
+    // Write back via store (best-effort, races tolerated)
+    let mut i = range.start;
+    for &(_, id) in shrink_out.iter() {
+        neighbors[i].store(id as i32, AtomicOrdering::Relaxed);
+        i += 1;
+    }
+    while i < range.end {
+        neighbors[i].store(-1, AtomicOrdering::Relaxed);
+        i += 1;
     }
 }
 

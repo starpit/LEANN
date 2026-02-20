@@ -79,6 +79,13 @@ impl FlatMinHeap {
         self.len == 0
     }
 
+    /// Peek at the minimum element without removing it.
+    #[inline(always)]
+    pub(crate) fn peek(&self) -> (f32, u32) {
+        debug_assert!(self.len > 0);
+        unsafe { (*self.dis.get_unchecked(0), *self.ids.get_unchecked(0)) }
+    }
+
     #[inline]
     pub(crate) fn push(&mut self, dis: f32, id: u32) {
         let pos = self.len;
@@ -476,7 +483,7 @@ where
 
         let neighbors = graph.get_neighbors(cand_id as usize, 0);
 
-        // Single-pass: check visited + accumulate batches of 4 for distance
+        // Check visited + accumulate batches of 4 for distance
         let mut counter = 0;
         for &nb in neighbors {
             if nb < 0 {
