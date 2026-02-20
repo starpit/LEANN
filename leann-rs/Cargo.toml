@@ -1,5 +1,5 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = [
     "crates/leann-core",
     "crates/leann-cli",
@@ -13,7 +13,7 @@ exclude = [
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/your-org/leann"
+repository = "https://github.com/starpit/LEANN"
 
 [workspace.dependencies]
 # Serialization

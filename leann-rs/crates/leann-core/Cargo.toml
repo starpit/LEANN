@@ -1,7 +1,13 @@
 [package]
 name = "leann-core"
+description = "LEANN is a revolutionary vector database that democratizes personal AI. Transform your laptop into a powerful RAG system that can index and search through millions of documents while using 97% less storage than traditional solutions without accuracy loss."
+readme = "../../README.md"
+license.workspace = true
+repository.workspace = true
 version.workspace = true
 edition.workspace = true
+keywords = ["hnsw", "vector-search", "nearest-neighbor", "rag"]
+categories = ["algorithms", "science"]
 
 [dependencies]
 serde = { workspace = true }
