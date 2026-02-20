@@ -1,6 +1,6 @@
 use anyhow::Result;
 use std::sync::Arc;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use super::EmbeddingProvider;
 use crate::index::DistanceMetric;
@@ -94,17 +94,18 @@ impl EmbeddingServer {
 
     fn handle_request(&self, request_bytes: &[u8]) -> Result<Vec<u8>> {
         // Try as list of strings (text embedding)
-        if let Ok(texts) = rmp_serde::from_slice::<Vec<String>>(request_bytes) {
-            if !texts.is_empty() && texts.iter().all(|t| !t.is_empty()) {
-                return self.handle_text_embedding(&texts);
-            }
+        if let Ok(texts) = rmp_serde::from_slice::<Vec<String>>(request_bytes)
+            && !texts.is_empty()
+            && texts.iter().all(|t| !t.is_empty())
+        {
+            return self.handle_text_embedding(&texts);
         }
 
         // Try as [[ids], [query_vec]] (distance calculation)
-        if let Ok(parts) = rmp_serde::from_slice::<Vec<Vec<serde_json::Value>>>(request_bytes) {
-            if parts.len() == 2 {
-                return self.handle_distance_request(&parts);
-            }
+        if let Ok(parts) = rmp_serde::from_slice::<Vec<Vec<serde_json::Value>>>(request_bytes)
+            && parts.len() == 2
+        {
+            return self.handle_distance_request(&parts);
         }
 
         // Fall back to embedding by ID
@@ -146,32 +147,32 @@ impl EmbeddingServer {
 
         for (idx, &nid) in node_ids.iter().enumerate() {
             let passage_id = self.map_node_id(nid);
-            if let Ok(passage) = self.passages.get_passage(&passage_id) {
-                if !passage.text.is_empty() {
-                    texts.push(passage.text);
-                    found_indices.push(idx);
-                }
+            if let Ok(passage) = self.passages.get_passage(&passage_id)
+                && !passage.text.is_empty()
+            {
+                texts.push(passage.text);
+                found_indices.push(idx);
             }
         }
 
-        if !texts.is_empty() {
-            if let Ok(embeddings) = self.provider.compute_embeddings(&texts) {
-                for (i, &original_idx) in found_indices.iter().enumerate() {
-                    let emb = embeddings.row(i);
-                    let dist = match self.distance_metric {
-                        DistanceMetric::L2 => emb
-                            .iter()
-                            .zip(query_vector.iter())
-                            .map(|(a, b)| (a - b) * (a - b))
-                            .sum(),
-                        _ => -emb
-                            .iter()
-                            .zip(query_vector.iter())
-                            .map(|(a, b)| a * b)
-                            .sum::<f32>(),
-                    };
-                    distances[original_idx] = dist;
-                }
+        if !texts.is_empty()
+            && let Ok(embeddings) = self.provider.compute_embeddings(&texts)
+        {
+            for (i, &original_idx) in found_indices.iter().enumerate() {
+                let emb = embeddings.row(i);
+                let dist = match self.distance_metric {
+                    DistanceMetric::L2 => emb
+                        .iter()
+                        .zip(query_vector.iter())
+                        .map(|(a, b)| (a - b) * (a - b))
+                        .sum(),
+                    _ => -emb
+                        .iter()
+                        .zip(query_vector.iter())
+                        .map(|(a, b)| a * b)
+                        .sum::<f32>(),
+                };
+                distances[original_idx] = dist;
             }
         }
 
@@ -187,25 +188,25 @@ impl EmbeddingServer {
 
         for (idx, &nid) in node_ids.iter().enumerate() {
             let passage_id = self.map_node_id(nid);
-            if let Ok(passage) = self.passages.get_passage(&passage_id) {
-                if !passage.text.is_empty() {
-                    texts.push(passage.text);
-                    found_indices.push(idx);
-                }
+            if let Ok(passage) = self.passages.get_passage(&passage_id)
+                && !passage.text.is_empty()
+            {
+                texts.push(passage.text);
+                found_indices.push(idx);
             }
         }
 
         let mut flat_data = vec![0.0f32; n * d];
 
-        if !texts.is_empty() {
-            if let Ok(embeddings) = self.provider.compute_embeddings(&texts) {
-                for (j, &pos) in found_indices.iter().enumerate() {
-                    let emb = embeddings.row(j);
-                    let start = pos * d;
-                    for (k, &val) in emb.iter().enumerate() {
-                        if start + k < flat_data.len() {
-                            flat_data[start + k] = val;
-                        }
+        if !texts.is_empty()
+            && let Ok(embeddings) = self.provider.compute_embeddings(&texts)
+        {
+            for (j, &pos) in found_indices.iter().enumerate() {
+                let emb = embeddings.row(j);
+                let start = pos * d;
+                for (k, &val) in emb.iter().enumerate() {
+                    if start + k < flat_data.len() {
+                        flat_data[start + k] = val;
                     }
                 }
             }

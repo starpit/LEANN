@@ -120,7 +120,7 @@ impl LeannBuilder {
 
         // Detect dimensions if not set
         if self.dimensions.is_none() {
-            let dummy = provider.compute_embeddings(&["dummy".to_string().into()])?;
+            let dummy = provider.compute_embeddings(&["dummy".to_string()])?;
             self.dimensions = Some(dummy.ncols());
         }
         let dimensions = self.dimensions.unwrap();

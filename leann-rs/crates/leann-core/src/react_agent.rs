@@ -1,6 +1,5 @@
 use anyhow::Result;
-use std::collections::HashMap;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::chat::{LlmConfig, LlmParams, LlmProvider, get_llm};
 use crate::search_result::SearchResult;
@@ -21,6 +20,7 @@ pub struct ReActAgent {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct SearchHistoryEntry {
     iteration: usize,
     thought: String,
@@ -97,7 +97,7 @@ impl ReActAgent {
                     question,
                     all_context.join("\n")
                 );
-                return Ok(self.llm.ask(&final_prompt, &LlmParams::default())?);
+                return self.llm.ask(&final_prompt, &LlmParams::default());
             }
         }
 
@@ -110,7 +110,7 @@ impl ReActAgent {
             question,
             all_context.join("\n")
         );
-        Ok(self.llm.ask(&final_prompt, &LlmParams::default())?)
+        self.llm.ask(&final_prompt, &LlmParams::default())
     }
 
     fn create_react_prompt(

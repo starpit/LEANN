@@ -105,7 +105,7 @@ fn chunk_python(source: &str, filename: &str, max_chunk_size: usize) -> Vec<Code
             } else {
                 // Split large blocks
                 let sub_chunks = split_large_block(&lines[start_line..end_line], max_chunk_size);
-                for (offset, sub) in sub_chunks.into_iter().enumerate() {
+                for sub in sub_chunks {
                     chunks.push(CodeChunk {
                         text: sub,
                         chunk_type: format!("{}_part", chunk_type),
@@ -177,8 +177,8 @@ fn chunk_rust(source: &str, filename: &str, max_chunk_size: usize) -> Vec<CodeCh
             let mut end_line = i;
             let mut found_open = false;
 
-            for j in i..lines.len() {
-                for ch in lines[j].chars() {
+            for (j, line) in lines.iter().enumerate().skip(i) {
+                for ch in line.chars() {
                     if ch == '{' {
                         brace_count += 1;
                         found_open = true;
@@ -263,8 +263,8 @@ fn chunk_js_ts(source: &str, filename: &str, max_chunk_size: usize) -> Vec<CodeC
             let mut end_line = i;
             let mut found_open = false;
 
-            for j in i..lines.len() {
-                for ch in lines[j].chars() {
+            for (j, line) in lines.iter().enumerate().skip(i) {
+                for ch in line.chars() {
                     if ch == '{' {
                         brace_count += 1;
                         found_open = true;
@@ -357,10 +357,10 @@ fn extract_name(definition_line: &str) -> String {
     // "def foo(..." or "class Foo:" or "async def bar(..."
     let parts: Vec<&str> = trimmed.split_whitespace().collect();
     for (i, &part) in parts.iter().enumerate() {
-        if part == "def" || part == "class" {
-            if let Some(name) = parts.get(i + 1) {
-                return name.trim_end_matches('(').trim_end_matches(':').to_string();
-            }
+        if (part == "def" || part == "class")
+            && let Some(name) = parts.get(i + 1)
+        {
+            return name.trim_end_matches('(').trim_end_matches(':').to_string();
         }
     }
     "unknown".to_string()
@@ -371,14 +371,14 @@ fn extract_rust_name(definition_line: &str) -> String {
     let keywords = ["fn", "struct", "enum", "impl", "trait", "mod"];
     let parts: Vec<&str> = trimmed.split_whitespace().collect();
     for (i, &part) in parts.iter().enumerate() {
-        if keywords.contains(&part) {
-            if let Some(name) = parts.get(i + 1) {
-                return name
-                    .trim_end_matches('{')
-                    .trim_end_matches('<')
-                    .trim_end_matches('(')
-                    .to_string();
-            }
+        if keywords.contains(&part)
+            && let Some(name) = parts.get(i + 1)
+        {
+            return name
+                .trim_end_matches('{')
+                .trim_end_matches('<')
+                .trim_end_matches('(')
+                .to_string();
         }
     }
     "unknown".to_string()

@@ -81,10 +81,10 @@ impl MerkleTree {
         let new_files = &other_root_node.children;
 
         let mut all_paths: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        for (_, node) in old_files {
+        for node in old_files.values() {
             all_paths.insert(&node.data);
         }
-        for (_, node) in new_files {
+        for node in new_files.values() {
             all_paths.insert(&node.data);
         }
 

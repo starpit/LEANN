@@ -241,10 +241,10 @@ fn resolve_candidates(
     }
 
     // 2) Relative key
-    if let (Some(dir), Some(rel)) = (meta_dir, relative_key) {
-        if !rel.is_empty() {
-            candidates.push(dir.join(rel));
-        }
+    if let (Some(dir), Some(rel)) = (meta_dir, relative_key)
+        && !rel.is_empty()
+    {
+        candidates.push(dir.join(rel));
     }
 
     // 3) Standard sibling default
@@ -446,10 +446,10 @@ fn parse_python_pickle_offset_map(data: &[u8]) -> Result<HashMap<String, u64>> {
                 if stack.len() >= 3 {
                     let value = stack.pop().unwrap();
                     let key = stack.pop().unwrap();
-                    if let Some(PickleValue::Dict(d)) = stack.last_mut() {
-                        if let (PickleValue::Str(k), PickleValue::Int(v)) = (key, value) {
-                            d.insert(k, v as u64);
-                        }
+                    if let Some(PickleValue::Dict(d)) = stack.last_mut()
+                        && let (PickleValue::Str(k), PickleValue::Int(v)) = (key, value)
+                    {
+                        d.insert(k, v as u64);
                     }
                 }
             }
@@ -516,7 +516,7 @@ fn read_long_bytes(bytes: &[u8]) -> i64 {
         val |= (b as i64) << (8 * i);
     }
     // Sign extend if the high bit of the last byte is set
-    if bytes.last().map_or(false, |&b| b & 0x80 != 0) {
+    if bytes.last().is_some_and(|&b| b & 0x80 != 0) {
         let bits = bytes.len() * 8;
         if bits < 64 {
             val |= !0i64 << bits;
@@ -834,8 +834,8 @@ mod tests {
 
         let ids = load_id_map(&paths.id_map_path()).unwrap();
         assert_eq!(ids.len(), 25);
-        for i in 0..25 {
-            assert_eq!(ids[i], i.to_string());
+        for (i, id) in ids.iter().enumerate().take(25) {
+            assert_eq!(*id, i.to_string());
         }
     }
 

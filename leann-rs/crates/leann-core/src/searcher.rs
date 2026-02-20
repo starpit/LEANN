@@ -282,16 +282,16 @@ impl LeannSearcher {
             use std::io::BufRead;
             for line in reader.lines() {
                 let line = line?;
-                if pattern.is_match(&line) {
-                    if let Ok(passage) = serde_json::from_str::<crate::passages::Passage>(&line) {
-                        let count = pattern.find_iter(&passage.text).count();
-                        matches.push(SearchResult::with_metadata(
-                            passage.id,
-                            count as f64,
-                            passage.text,
-                            passage.metadata,
-                        ));
-                    }
+                if pattern.is_match(&line)
+                    && let Ok(passage) = serde_json::from_str::<crate::passages::Passage>(&line)
+                {
+                    let count = pattern.find_iter(&passage.text).count();
+                    matches.push(SearchResult::with_metadata(
+                        passage.id,
+                        count as f64,
+                        passage.text,
+                        passage.metadata,
+                    ));
                 }
             }
         }

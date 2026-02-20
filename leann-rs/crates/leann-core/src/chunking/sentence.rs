@@ -56,10 +56,11 @@ fn is_sentence_boundary(chars: &[char], pos: usize) -> bool {
     }
 
     // Not a boundary if preceded by a single uppercase letter (abbreviation like "U.S.")
-    if pos >= 1 && chars[pos - 1].is_ascii_uppercase() {
-        if pos < 2 || !chars[pos - 2].is_alphanumeric() {
-            return false;
-        }
+    if pos >= 1
+        && chars[pos - 1].is_ascii_uppercase()
+        && (pos < 2 || !chars[pos - 2].is_alphanumeric())
+    {
+        return false;
     }
 
     // Is a boundary if followed by whitespace + uppercase, or end of text

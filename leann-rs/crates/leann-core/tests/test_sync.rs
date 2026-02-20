@@ -91,7 +91,7 @@ fn test_file_synchronizer_no_changes() {
     )
     .unwrap();
 
-    let (added, removed, modified) = sync.check_for_changes().unwrap();
+    let (added, removed, _modified) = sync.check_for_changes().unwrap();
     assert!(added.is_empty(), "No files should be added");
     assert!(removed.is_empty(), "No files should be removed");
     // modified may contain files due to how the tree hashing works;

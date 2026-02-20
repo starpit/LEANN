@@ -25,6 +25,7 @@ pub fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
 }
 
 #[inline]
+#[allow(dead_code)]
 fn l2_distance_scalar(a: &[f32], b: &[f32]) -> f32 {
     a.iter()
         .zip(b.iter())
@@ -219,6 +220,7 @@ pub fn inner_product_distance(a: &[f32], b: &[f32]) -> f32 {
 }
 
 #[inline]
+#[allow(dead_code)]
 fn inner_product_distance_scalar(a: &[f32], b: &[f32]) -> f32 {
     -a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f32>()
 }
@@ -405,6 +407,7 @@ pub fn l2_distance_batch_4(
 }
 
 #[inline]
+#[allow(dead_code)]
 fn l2_distance_batch_4_scalar(
     query: &[f32],
     y0: &[f32],
@@ -616,6 +619,7 @@ pub fn inner_product_distance_batch_4(
 }
 
 #[inline]
+#[allow(dead_code)]
 fn inner_product_distance_batch_4_scalar(
     query: &[f32],
     y0: &[f32],
@@ -822,6 +826,10 @@ impl VisitedList {
     #[inline]
     pub fn len(&self) -> usize {
         self.visited.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.visited.is_empty()
     }
 
     /// Mark a node as visited.

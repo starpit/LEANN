@@ -54,9 +54,10 @@ pub struct PassageSource {
 }
 
 /// The distance metric used for vector similarity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DistanceMetric {
+    #[default]
     Mips,
     L2,
     Cosine,
@@ -69,12 +70,6 @@ impl DistanceMetric {
             "cosine" => DistanceMetric::Cosine,
             _ => DistanceMetric::Mips,
         }
-    }
-}
-
-impl Default for DistanceMetric {
-    fn default() -> Self {
-        DistanceMetric::Mips
     }
 }
 

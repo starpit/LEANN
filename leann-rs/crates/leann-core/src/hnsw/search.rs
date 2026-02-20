@@ -411,6 +411,7 @@ unsafe fn get_vec(vectors: &[f32], id: usize, dim: usize) -> &[f32] {
 /// - Batched 4x distance: query loaded once, reused across 4 database vectors
 /// - Combined check_and_set: single cache access for visited check + mark
 /// - replace_max on result heap: single sift_down instead of pop + push
+#[allow(clippy::too_many_arguments)]
 fn search_hnsw_inner<D, B>(
     graph: &HnswGraph,
     query: &[f32],
@@ -528,8 +529,7 @@ where
         }
 
         // Process remainder (1-3 leftover neighbors)
-        for k in 0..counter {
-            let nb_id = saved[k];
+        for &nb_id in &saved[..counter] {
             let d_nb = unsafe { dist_fn(query, get_vec(vectors, nb_id as usize, d)) };
 
             if results.len() < ef {
@@ -752,7 +752,7 @@ mod tests {
             ..Default::default()
         };
 
-        let (labels, distances) =
+        let (labels, _distances) =
             search_hnsw_recompute(&graph, &query, 2, &params, |node_ids, q, out| {
                 for (i, &id) in node_ids.iter().enumerate() {
                     let vec = &flat_vectors[id * d..(id + 1) * d];

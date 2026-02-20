@@ -93,17 +93,17 @@ async fn list_indexes(State(state): State<AppState>) -> Json<IndexListResponse> 
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
-            if name.ends_with(".meta.json") {
-                if let Ok(meta) = IndexMeta::load(&path) {
-                    let index_name = name.strip_suffix(".meta.json").unwrap_or(&name).to_string();
-                    indexes.push(IndexInfo {
-                        name: index_name,
-                        embedding_model: meta.embedding_model,
-                        dimensions: meta.dimensions,
-                        backend: meta.backend_name,
-                        total_passages: meta.total_passages,
-                    });
-                }
+            if name.ends_with(".meta.json")
+                && let Ok(meta) = IndexMeta::load(&path)
+            {
+                let index_name = name.strip_suffix(".meta.json").unwrap_or(&name).to_string();
+                indexes.push(IndexInfo {
+                    name: index_name,
+                    embedding_model: meta.embedding_model,
+                    dimensions: meta.dimensions,
+                    backend: meta.backend_name,
+                    total_passages: meta.total_passages,
+                });
             }
         }
     }

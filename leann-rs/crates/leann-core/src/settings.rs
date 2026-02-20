@@ -18,11 +18,9 @@ pub fn resolve_ollama_host(explicit: Option<&str>) -> String {
         env::var("LOCAL_LLM_ENDPOINT").ok(),
     ];
 
-    for candidate in &candidates {
-        if let Some(val) = candidate {
-            if !val.is_empty() {
-                return clean_url(val);
-            }
+    for val in candidates.iter().flatten() {
+        if !val.is_empty() {
+            return clean_url(val);
         }
     }
 
@@ -38,11 +36,9 @@ pub fn resolve_openai_base_url(explicit: Option<&str>) -> String {
         env::var("LOCAL_OPENAI_BASE_URL").ok(),
     ];
 
-    for candidate in &candidates {
-        if let Some(val) = candidate {
-            if !val.is_empty() {
-                return clean_url(val);
-            }
+    for val in candidates.iter().flatten() {
+        if !val.is_empty() {
+            return clean_url(val);
         }
     }
 
@@ -58,11 +54,9 @@ pub fn resolve_anthropic_base_url(explicit: Option<&str>) -> String {
         env::var("LOCAL_ANTHROPIC_BASE_URL").ok(),
     ];
 
-    for candidate in &candidates {
-        if let Some(val) = candidate {
-            if !val.is_empty() {
-                return clean_url(val);
-            }
+    for val in candidates.iter().flatten() {
+        if !val.is_empty() {
+            return clean_url(val);
         }
     }
 
@@ -71,35 +65,36 @@ pub fn resolve_anthropic_base_url(explicit: Option<&str>) -> String {
 
 /// Resolve the API key for OpenAI-compatible services.
 pub fn resolve_openai_api_key(explicit: Option<&str>) -> Option<String> {
-    if let Some(key) = explicit {
-        if !key.is_empty() {
-            return Some(key.to_string());
-        }
+    if let Some(key) = explicit
+        && !key.is_empty()
+    {
+        return Some(key.to_string());
     }
     env::var("OPENAI_API_KEY").ok()
 }
 
 /// Resolve the API key for Anthropic services.
 pub fn resolve_anthropic_api_key(explicit: Option<&str>) -> Option<String> {
-    if let Some(key) = explicit {
-        if !key.is_empty() {
-            return Some(key.to_string());
-        }
+    if let Some(key) = explicit
+        && !key.is_empty()
+    {
+        return Some(key.to_string());
     }
     env::var("ANTHROPIC_API_KEY").ok()
 }
 
 /// Resolve the API key for Gemini services.
 pub fn resolve_gemini_api_key(explicit: Option<&str>) -> Option<String> {
-    if let Some(key) = explicit {
-        if !key.is_empty() {
-            return Some(key.to_string());
-        }
+    if let Some(key) = explicit
+        && !key.is_empty()
+    {
+        return Some(key.to_string());
     }
     env::var("GEMINI_API_KEY").ok()
 }
 
 /// Serialize provider options for child processes.
+#[allow(dead_code)]
 pub fn encode_provider_options(
     options: Option<&std::collections::HashMap<String, serde_json::Value>>,
 ) -> Option<String> {

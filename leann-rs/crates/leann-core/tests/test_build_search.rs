@@ -105,7 +105,7 @@ fn test_build_and_search_1000_docs() {
         ef_search: 64,
         ..Default::default()
     };
-    let (labels, distances) = search_hnsw(&graph, &query, 10, &flat_vectors, &params);
+    let (labels, _distances) = search_hnsw(&graph, &query, 10, &flat_vectors, &params);
     assert_eq!(labels.len(), 10, "Expected 10 results from 1000 docs");
 }
 
@@ -232,7 +232,7 @@ fn test_build_with_distance_metrics() {
             ef_search: 16,
             ..Default::default()
         };
-        let (labels, distances) = search_hnsw(&graph, &query, 3, &flat_vectors, &params);
+        let (labels, _distances) = search_hnsw(&graph, &query, 3, &flat_vectors, &params);
         assert_eq!(labels.len(), 3, "Expected 3 results for {:?}", metric);
     }
 }

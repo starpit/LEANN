@@ -628,7 +628,7 @@ fn cmd_build(args: BuildArgs) -> Result<()> {
         anyhow::bail!("No documents found");
     }
 
-    let mode = EmbeddingMode::from_str(&args.embedding_mode);
+    let mode = EmbeddingMode::from_str_lossy(&args.embedding_mode);
     let metric = DistanceMetric::default(); // MIPS
 
     let mut builder = LeannBuilder::new(&args.embedding_model, None, &args.embedding_mode)
@@ -663,10 +663,7 @@ fn cmd_build(args: BuildArgs) -> Result<()> {
     }
 
     println!("Created {} chunks", total_chunks);
-    println!(
-        "Building index '{}' with {} backend...",
-        args.index_name, "hnsw"
-    );
+    println!("Building index '{}' with hnsw backend...", args.index_name);
 
     // Create embedding provider
     let provider = create_embedding_provider(
@@ -730,10 +727,10 @@ fn cmd_search(
         for (i, result) in results.iter().enumerate() {
             println!("\n[{}] Score: {:.4}", i + 1, result.score);
             println!("    ID: {}", result.id);
-            if show_metadata {
-                if let Some(source) = result.metadata.get("source").and_then(|v| v.as_str()) {
-                    println!("    Source: {}", source);
-                }
+            if show_metadata
+                && let Some(source) = result.metadata.get("source").and_then(|v| v.as_str())
+            {
+                println!("    Source: {}", source);
             }
             let preview = if result.text.len() > 200 {
                 format!("{}...", &result.text[..200])
@@ -751,6 +748,7 @@ fn cmd_search(
 // Ask
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_ask(
     index_name: &str,
     question: &str,
@@ -839,6 +837,7 @@ fn cmd_interactive_ask(
 // React
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_react(
     index_name: &str,
     query: &str,
@@ -890,35 +889,35 @@ fn cmd_list() -> Result<()> {
 
     // CLI-format indexes: .leann/indexes/<name>/
     let cli_indexes_dir = current_path.join(".leann").join("indexes");
-    if cli_indexes_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(&cli_indexes_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    let meta_file = path.join("documents.leann.meta.json");
-                    let name = path.file_name().unwrap_or_default().to_string_lossy();
-                    let status = if meta_file.exists() {
-                        "OK"
-                    } else {
-                        "incomplete"
-                    };
+    if cli_indexes_dir.exists()
+        && let Ok(entries) = std::fs::read_dir(&cli_indexes_dir)
+    {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let meta_file = path.join("documents.leann.meta.json");
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                let status = if meta_file.exists() {
+                    "OK"
+                } else {
+                    "incomplete"
+                };
 
-                    let mut size_mb = 0.0f64;
-                    if let Ok(files) = std::fs::read_dir(&path) {
-                        for f in files.flatten() {
-                            if let Ok(meta) = f.metadata() {
-                                size_mb += meta.len() as f64 / (1024.0 * 1024.0);
-                            }
+                let mut size_mb = 0.0f64;
+                if let Ok(files) = std::fs::read_dir(&path) {
+                    for f in files.flatten() {
+                        if let Ok(meta) = f.metadata() {
+                            size_mb += meta.len() as f64 / (1024.0 * 1024.0);
                         }
                     }
-
-                    total += 1;
-                    print!("   {}. {} [{}]", total, name, status);
-                    if size_mb > 0.01 {
-                        print!(" ({:.1} MB)", size_mb);
-                    }
-                    println!();
                 }
+
+                total += 1;
+                print!("   {}. {} [{}]", total, name, status);
+                if size_mb > 0.01 {
+                    print!(" ({:.1} MB)", size_mb);
+                }
+                println!();
             }
         }
     }

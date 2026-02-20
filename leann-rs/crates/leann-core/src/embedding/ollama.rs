@@ -77,6 +77,7 @@ impl OllamaHandle {
     }
 
     /// Embed a slice of chunks, halving the sub-batch size on context-length errors.
+    #[allow(clippy::type_complexity)]
     fn embed_with_backoff<'a>(
         &'a self,
         chunks: &'a [String],
@@ -166,7 +167,7 @@ impl OllamaEmbedding {
         }
 
         let batch_size: usize = 128;
-        let num_batches = (chunks.len() + batch_size - 1) / batch_size;
+        let num_batches = chunks.len().div_ceil(batch_size);
 
         info!(
             "Ollama embedding: {} chunks in {} batches (concurrency={})",

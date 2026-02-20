@@ -136,6 +136,7 @@ impl BM25Scorer {
             .collect()
     }
 
+    #[allow(dead_code)]
     pub fn is_fitted(&self) -> bool {
         self.corpus_size > 0
     }

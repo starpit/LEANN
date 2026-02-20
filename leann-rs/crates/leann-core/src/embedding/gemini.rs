@@ -43,7 +43,7 @@ impl EmbeddingProvider for GeminiEmbedding {
 
         let mut all_data: Vec<f32> = Vec::new();
         let mut dim: Option<usize> = None;
-        let num_batches = (chunks.len() + max_batch_size - 1) / max_batch_size;
+        let num_batches = chunks.len().div_ceil(max_batch_size);
 
         for (i, batch) in chunks.chunks(max_batch_size).enumerate() {
             info!(

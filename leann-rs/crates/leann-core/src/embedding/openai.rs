@@ -72,7 +72,7 @@ impl EmbeddingProvider for OpenAiEmbedding {
         };
 
         let mut all_embeddings: Vec<Vec<f32>> = Vec::with_capacity(chunks.len());
-        let num_batches = (chunks.len() + max_batch_size - 1) / max_batch_size;
+        let num_batches = chunks.len().div_ceil(max_batch_size);
 
         for (i, batch) in chunks.chunks(max_batch_size).enumerate() {
             info!(

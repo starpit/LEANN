@@ -49,10 +49,7 @@ fn read_vec<T: Copy + Default, R: Read>(reader: &mut R) -> Result<Vec<T>> {
 fn write_vec<T: Copy, W: Write>(writer: &mut W, data: &[T]) -> Result<()> {
     write_le(writer, data.len() as u64)?;
     let bytes = unsafe {
-        std::slice::from_raw_parts(
-            data.as_ptr() as *const u8,
-            data.len() * std::mem::size_of::<T>(),
-        )
+        std::slice::from_raw_parts(data.as_ptr() as *const u8, std::mem::size_of_val(data))
     };
     writer.write_all(bytes)?;
     Ok(())
@@ -74,7 +71,7 @@ pub fn read_hnsw_index<R: Read + Seek>(reader: &mut R) -> Result<HnswGraph> {
     }
 
     let d: i32 = read_le(reader)?;
-    let ntotal: i64 = read_le(reader)?;
+    let _ntotal: i64 = read_le(reader)?;
     let _dummy1: i64 = read_le(reader)?;
     let _dummy2: i64 = read_le(reader)?;
     let is_trained: bool = read_le::<u8, _>(reader)? != 0;

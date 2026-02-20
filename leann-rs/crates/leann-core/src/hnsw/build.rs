@@ -121,9 +121,9 @@ where
     // Build offsets and allocate neighbors
     let mut offsets = Vec::with_capacity(n + 1);
     let mut current_offset = 0u64;
-    for i in 0..n {
+    for &level in levels.iter().take(n) {
         offsets.push(current_offset);
-        let node_levels = levels[i] as usize;
+        let node_levels = level as usize;
         let node_neighbors = if node_levels == 0 {
             0
         } else {
@@ -281,8 +281,7 @@ where
                 }
 
                 // Process remainder (1-3 leftover neighbors)
-                for k in 0..counter {
-                    let nb_id = saved[k];
+                for &nb_id in &saved[..counter] {
                     let d_nb = dist_fn(query_slice, unsafe {
                         get_flat(flat_ptr, nb_id as usize, d)
                     });
@@ -440,9 +439,9 @@ where
     // Build offsets (sequential, fast)
     let mut offsets = Vec::with_capacity(n + 1);
     let mut current_offset = 0u64;
-    for i in 0..n {
+    for &level in levels.iter().take(n) {
         offsets.push(current_offset);
-        let node_levels = levels[i] as usize;
+        let node_levels = level as usize;
         let node_neighbors = if node_levels == 0 {
             0
         } else {
@@ -603,8 +602,7 @@ where
                         }
 
                         // Process remainder (1-3 leftover neighbors)
-                        for k in 0..counter {
-                            let nb_id = saved[k];
+                        for &nb_id in &saved[..counter] {
                             let d_nb = dist_ref(query_slice, unsafe {
                                 get_flat(flat_ptr, nb_id as usize, d)
                             });
@@ -667,7 +665,7 @@ where
                 // CAS-update entry point if this node has a higher level
                 loop {
                     let ep = entry_point.load(AtomicOrdering::Relaxed);
-                    if node_level <= levels[ep as usize] - 1 {
+                    if node_level < levels[ep as usize] {
                         break;
                     }
                     if entry_point
@@ -703,6 +701,7 @@ where
 }
 
 /// Shared graph finalization: build assign_probas and construct HnswGraph.
+#[allow(clippy::too_many_arguments)]
 fn finalize_graph(
     data: &Array2<f32>,
     config: &HnswConfig,
@@ -856,6 +855,7 @@ fn shrink_neighbor_list<D: Fn(&[f32], &[f32]) -> f32>(
 ///
 /// If there's an empty slot, just insert. If full, rebuild the entire
 /// neighbor list using `shrink_neighbor_list` with the new link included.
+#[allow(clippy::too_many_arguments)]
 fn add_link<D: Fn(&[f32], &[f32]) -> f32>(
     neighbors: &mut [i32],
     offsets: &[u64],
@@ -924,6 +924,7 @@ fn add_link<D: Fn(&[f32], &[f32]) -> f32>(
 /// If there's an empty slot, CAS to claim it. Otherwise, snapshot all current
 /// neighbors, run shrink_neighbor_list with the new source included, and
 /// write back via CAS. Lost races are tolerated — HNSW is robust to them.
+#[allow(clippy::too_many_arguments)]
 fn add_link_atomic<D: Fn(&[f32], &[f32]) -> f32>(
     neighbors: &[AtomicI32],
     offsets: &[u64],

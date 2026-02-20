@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::net::TcpListener;
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 /// Manages embedding server subprocess lifecycle.
 pub struct EmbeddingServerManager {
@@ -106,7 +106,6 @@ impl EmbeddingServerManager {
             // Try graceful shutdown first
             #[cfg(unix)]
             {
-                use std::os::unix::process::CommandExt;
                 unsafe {
                     libc::kill(process.id() as i32, libc::SIGTERM);
                 }
@@ -156,9 +155,7 @@ impl EmbeddingServerManager {
             }
 
             // Check if process died
-            if let Some(ref process) = self.process {
-                // We can't call try_wait on an immutable reference, just sleep and check port
-            }
+            // We can't call try_wait on an immutable reference, just sleep and check port
 
             std::thread::sleep(check_interval);
         }

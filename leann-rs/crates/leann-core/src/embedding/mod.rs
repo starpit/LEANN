@@ -32,7 +32,7 @@ pub enum EmbeddingMode {
 }
 
 impl EmbeddingMode {
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_str_lossy(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "openai" => EmbeddingMode::OpenAI,
             "ollama" => EmbeddingMode::Ollama,

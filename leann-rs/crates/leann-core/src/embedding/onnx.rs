@@ -11,7 +11,7 @@ use super::EmbeddingProvider;
 pub struct OnnxEmbedding {
     model_path: PathBuf,
     dimensions: usize,
-    max_seq_length: usize,
+    _max_seq_length: usize,
     model_name: String,
 }
 
@@ -29,7 +29,7 @@ impl OnnxEmbedding {
         }
 
         // Check for model file
-        let model_file = if path.join("model_optimized.onnx").exists() {
+        let _model_file = if path.join("model_optimized.onnx").exists() {
             path.join("model_optimized.onnx")
         } else if path.join("model.onnx").exists() {
             path.join("model.onnx")
@@ -45,7 +45,7 @@ impl OnnxEmbedding {
         Ok(Self {
             model_path: path,
             dimensions,
-            max_seq_length: 512,
+            _max_seq_length: 512,
             model_name: model_path.to_string(),
         })
     }

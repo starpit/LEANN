@@ -69,6 +69,7 @@ pub fn sample_documents(n: usize) -> Vec<(String, HashMap<String, serde_json::Va
 }
 
 /// 10 diverse documents for hybrid search tests (matching Python test_hybrid_search.py).
+#[allow(dead_code)]
 pub fn diverse_documents() -> Vec<(String, HashMap<String, serde_json::Value>)> {
     let texts = [
         "The quick brown fox jumps over the lazy dog in the sunny meadow",

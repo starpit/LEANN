@@ -6,7 +6,6 @@
 use leann_core::chunking::ast::{chunk_code, detect_language};
 use leann_core::chunking::chunk_text;
 use leann_core::document_loaders::extract_text;
-use std::io::Write;
 
 /// Load a .txt file and verify content.
 #[test]
