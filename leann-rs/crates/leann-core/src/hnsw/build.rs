@@ -1,7 +1,7 @@
 use anyhow::Result;
 use ndarray::Array2;
 use rand::rngs::StdRng;
-use rand::{RngExt, SeedableRng};
+use rand::{Rng, SeedableRng};
 use std::sync::atomic::{AtomicI32, Ordering as AtomicOrdering};
 
 use rayon::prelude::*;

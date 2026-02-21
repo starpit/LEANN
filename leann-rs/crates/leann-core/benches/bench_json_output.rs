@@ -8,7 +8,7 @@
 
 use ndarray::Array2;
 use rand::rngs::StdRng;
-use rand::{RngExt, SeedableRng};
+use rand::{Rng, SeedableRng};
 use std::collections::BTreeMap;
 use std::hint::black_box;
 use std::time::Instant;

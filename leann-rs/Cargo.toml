@@ -33,7 +33,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Numeric
 ndarray = "0.17"
-rand = "0.10"
+rand = "0.9"
 
 # ZMQ + msgpack
 zeromq = "0.5"
