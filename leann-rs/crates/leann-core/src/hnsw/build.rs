@@ -1,7 +1,7 @@
 use anyhow::Result;
 use ndarray::Array2;
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use std::sync::atomic::{AtomicI32, Ordering as AtomicOrdering};
 
 use rayon::prelude::*;
@@ -98,7 +98,7 @@ where
     let mut max_level: i32 = 0;
 
     for _ in 0..n {
-        let r: f64 = rng.r#gen::<f64>();
+        let r: f64 = rng.random::<f64>();
         let level = (-r.ln() * ml).floor() as i32;
         let level = level.max(0);
         if level > max_level {
@@ -418,7 +418,7 @@ where
     let mut max_level: i32 = 0;
 
     for _ in 0..n {
-        let r: f64 = rng.r#gen::<f64>();
+        let r: f64 = rng.random::<f64>();
         let level = (-r.ln() * ml).floor() as i32;
         let level = level.max(0);
         if level > max_level {
@@ -1057,10 +1057,10 @@ mod tests {
     #[test]
     fn test_parallel_larger_graph() {
         // 100 random vectors in 16 dimensions
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let n = 100;
         let d = 16;
-        let data_vec: Vec<f32> = (0..n * d).map(|_| rng.r#gen::<f32>()).collect();
+        let data_vec: Vec<f32> = (0..n * d).map(|_| rng.random::<f32>()).collect();
         let data = Array2::from_shape_vec((n, d), data_vec).unwrap();
 
         let config = HnswConfig {

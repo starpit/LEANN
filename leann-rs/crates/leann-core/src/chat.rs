@@ -229,11 +229,7 @@ impl LlmProvider for GeminiChat {
             self.model, self.api_key
         );
 
-        let response = self
-            .client
-            .post(&url)
-            .json(&payload)
-            .send()?;
+        let response = self.client.post(&url).json(&payload).send()?;
 
         let body: serde_json::Value = response.json()?;
         Ok(body["candidates"][0]["content"]["parts"][0]["text"]

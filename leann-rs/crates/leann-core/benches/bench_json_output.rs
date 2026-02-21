@@ -8,7 +8,7 @@
 
 use ndarray::Array2;
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use std::collections::BTreeMap;
 use std::hint::black_box;
 use std::time::Instant;
@@ -22,12 +22,12 @@ use leann_core::hnsw::search::{
 use leann_core::hnsw::simd::{inner_product_distance, l2_distance, l2_distance_batch_4};
 
 fn gen_vectors(rng: &mut StdRng, n: usize, d: usize) -> Array2<f32> {
-    let data: Vec<f32> = (0..n * d).map(|_| rng.r#gen::<f32>()).collect();
+    let data: Vec<f32> = (0..n * d).map(|_| rng.random::<f32>()).collect();
     Array2::from_shape_vec((n, d), data).unwrap()
 }
 
 fn gen_query(rng: &mut StdRng, d: usize) -> Vec<f32> {
-    (0..d).map(|_| rng.r#gen::<f32>()).collect()
+    (0..d).map(|_| rng.random::<f32>()).collect()
 }
 
 /// Run a benchmark: warmup iterations, then `repeats` timed iterations.
@@ -178,8 +178,8 @@ fn main() {
     let dist_batch = 1000;
     for dim in [128, 384, 768] {
         let mut rng = StdRng::seed_from_u64(42);
-        let a: Vec<f32> = (0..dim).map(|_| rng.r#gen::<f32>()).collect();
-        let b: Vec<f32> = (0..dim).map(|_| rng.r#gen::<f32>()).collect();
+        let a: Vec<f32> = (0..dim).map(|_| rng.random::<f32>()).collect();
+        let b: Vec<f32> = (0..dim).map(|_| rng.random::<f32>()).collect();
 
         let times = bench_fn(
             || {

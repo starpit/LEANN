@@ -11,7 +11,11 @@ use leann_core::searcher::{LeannSearcher, SearchConfig};
 use std::collections::HashMap;
 
 /// Helper to create filters in the expected format.
-fn filter(field: &str, op: &str, value: serde_json::Value) -> HashMap<String, HashMap<String, serde_json::Value>> {
+fn filter(
+    field: &str,
+    op: &str,
+    value: serde_json::Value,
+) -> HashMap<String, HashMap<String, serde_json::Value>> {
     let mut filters = HashMap::new();
     let mut spec = HashMap::new();
     spec.insert(op.to_string(), value);
@@ -323,7 +327,9 @@ fn test_filter_range() {
         ..Default::default()
     };
 
-    let results = searcher.search_with_params("document", 50, &config).unwrap();
+    let results = searcher
+        .search_with_params("document", 50, &config)
+        .unwrap();
 
     for r in &results {
         let num = r.metadata.get("doc_num").and_then(|v| v.as_i64()).unwrap();
@@ -361,7 +367,9 @@ fn test_filter_compound_and() {
         ..Default::default()
     };
 
-    let results = searcher.search_with_params("document", 100, &config).unwrap();
+    let results = searcher
+        .search_with_params("document", 100, &config)
+        .unwrap();
 
     for r in &results {
         let topic = r.metadata.get("topic").and_then(|v| v.as_str()).unwrap();
