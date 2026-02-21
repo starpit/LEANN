@@ -83,8 +83,15 @@ where
         anyhow::bail!("Cannot build HNSW from empty data");
     }
 
-    // Pre-flatten data to avoid per-call data.row().as_slice() overhead.
-    let flat: Vec<f32> = data.iter().copied().collect();
+    // Use contiguous slice directly if possible, otherwise copy.
+    let flat_owned;
+    let flat: &[f32] = match data.as_slice() {
+        Some(s) => s,
+        None => {
+            flat_owned = data.iter().copied().collect::<Vec<f32>>();
+            &flat_owned
+        }
+    };
     assert!(flat.len() >= n * d);
     let flat_ptr = flat.as_ptr();
 
@@ -405,8 +412,15 @@ where
     let ml = 1.0 / (m as f64).ln();
     let ef = config.ef_construction;
 
-    // Pre-flatten data to avoid per-call data.row().as_slice() overhead.
-    let flat: Vec<f32> = data.iter().copied().collect();
+    // Use contiguous slice directly if possible, otherwise copy.
+    let flat_owned;
+    let flat: &[f32] = match data.as_slice() {
+        Some(s) => s,
+        None => {
+            flat_owned = data.iter().copied().collect::<Vec<f32>>();
+            &flat_owned
+        }
+    };
     assert!(flat.len() >= n * d);
     // Store base address as usize so it's Send+Sync for rayon closures.
     // Safety: flat lives until after pool.install() returns.
@@ -684,8 +698,11 @@ where
         );
     });
 
-    // Convert AtomicI32 → i32 (zero-cost: same layout, into_inner consumes)
-    let neighbors_i32: Vec<i32> = neighbors.into_iter().map(|a| a.into_inner()).collect();
+    // Convert AtomicI32 → i32 in-place (same size/alignment, no allocation).
+    let neighbors_i32 = unsafe {
+        let mut v = std::mem::ManuallyDrop::new(neighbors);
+        Vec::from_raw_parts(v.as_mut_ptr() as *mut i32, v.len(), v.capacity())
+    };
     let final_entry_point = entry_point.into_inner();
 
     finalize_graph(

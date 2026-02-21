@@ -6,9 +6,9 @@ use super::graph::*;
 /// Read a little-endian value from a reader.
 fn read_le<T: Copy + Default, R: Read>(reader: &mut R) -> Result<T> {
     let size = std::mem::size_of::<T>();
-    let mut buf = vec![0u8; size];
+    let mut buf = [0u8; 8]; // stack buffer, covers all primitive types
     reader
-        .read_exact(&mut buf)
+        .read_exact(&mut buf[..size])
         .context("unexpected EOF reading struct")?;
     Ok(unsafe { std::ptr::read_unaligned(buf.as_ptr() as *const T) })
 }
@@ -31,17 +31,16 @@ fn read_vec<T: Copy + Default, R: Read>(reader: &mut R) -> Result<Vec<T>> {
     }
     let elem_size = std::mem::size_of::<T>();
     let total_bytes = count * elem_size;
-    let mut buf = vec![0u8; total_bytes];
-    reader.read_exact(&mut buf).with_context(|| {
+    let mut result = vec![T::default(); count];
+    // Read directly into the typed buffer, avoiding a separate byte allocation + copy.
+    let byte_slice =
+        unsafe { std::slice::from_raw_parts_mut(result.as_mut_ptr() as *mut u8, total_bytes) };
+    reader.read_exact(byte_slice).with_context(|| {
         format!(
             "reading vector: expected {} bytes ({} elements)",
             total_bytes, count
         )
     })?;
-    let mut result = vec![T::default(); count];
-    unsafe {
-        std::ptr::copy_nonoverlapping(buf.as_ptr(), result.as_mut_ptr() as *mut u8, total_bytes);
-    }
     Ok(result)
 }
 
