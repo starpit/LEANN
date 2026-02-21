@@ -1,5 +1,3 @@
-use std::cmp::Ordering;
-
 use super::graph::*;
 use super::simd::{
     VisitedList, inner_product_distance, inner_product_distance_batch_4, l2_distance,
@@ -250,21 +248,21 @@ impl FlatMaxHeap {
         self.sift_down(0);
     }
 
-    /// Collect all entries sorted by ascending distance.
-    pub(crate) fn into_sorted(self) -> (Vec<u32>, Vec<f32>) {
-        let mut pairs: Vec<(f32, u32)> = self.dis[..self.len]
-            .iter()
-            .zip(self.ids[..self.len].iter())
-            .map(|(&d, &id)| (d, id))
-            .collect();
-        pairs.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
-        let mut ids = Vec::with_capacity(pairs.len());
-        let mut dis = Vec::with_capacity(pairs.len());
-        for (d, id) in pairs {
-            ids.push(id);
-            dis.push(d);
+    /// In-place heap-sort: sort entries by ascending distance with zero allocations.
+    /// Returns slices into the internal arrays. The heap property is destroyed;
+    /// call `clear()` before reusing.
+    pub(crate) fn drain_sorted(&mut self) -> (&[u32], &[f32]) {
+        let n = self.len;
+        // Heap-sort: repeatedly swap root (max) with last and shrink heap.
+        // Produces ascending order in dis[0..n] and ids[0..n].
+        while self.len > 1 {
+            self.len -= 1;
+            self.dis.swap(0, self.len);
+            self.ids.swap(0, self.len);
+            self.sift_down(0);
         }
-        (ids, dis)
+        self.len = n;
+        (&self.ids[..n], &self.dis[..n])
     }
 
     #[inline]
@@ -329,16 +327,21 @@ pub struct SearchResults {
 }
 
 /// Pre-allocated buffers for HNSW search. Reuse across multiple queries
-/// to avoid repeated O(n) allocation of the visited list.
+/// to avoid repeated heap and visited-list allocation.
 pub struct SearchBuffers {
     visited: VisitedList,
+    candidates: FlatMinHeap,
+    results: FlatMaxHeap,
 }
 
 impl SearchBuffers {
     /// Create new search buffers for a graph with `ntotal` nodes.
+    /// Heaps start empty and grow on first use; subsequent searches reuse capacity.
     pub fn new(ntotal: usize) -> Self {
         Self {
             visited: VisitedList::new(ntotal),
+            candidates: FlatMinHeap::new(0),
+            results: FlatMaxHeap::new(0),
         }
     }
 }
@@ -359,7 +362,7 @@ pub fn search_hnsw(
 
 /// Search the HNSW graph, reusing pre-allocated buffers.
 /// Use this when searching the same graph multiple times to avoid
-/// O(n) VisitedList allocation per call.
+/// repeated allocation of the visited list and search heaps.
 pub fn search_hnsw_buf(
     graph: &HnswGraph,
     query: &[f32],
@@ -377,7 +380,7 @@ pub fn search_hnsw_buf(
             top_k,
             vectors,
             params,
-            &mut buffers.visited,
+            buffers,
             l2_distance,
             l2_distance_batch_4,
         ),
@@ -387,7 +390,7 @@ pub fn search_hnsw_buf(
             top_k,
             vectors,
             params,
-            &mut buffers.visited,
+            buffers,
             inner_product_distance,
             inner_product_distance_batch_4,
         ),
@@ -418,7 +421,7 @@ fn search_hnsw_inner<D, B>(
     top_k: usize,
     vectors: &[f32],
     params: &SearchParams,
-    visited: &mut VisitedList,
+    buffers: &mut SearchBuffers,
     dist_fn: D,
     dist_batch_4: B,
 ) -> (Vec<usize>, Vec<f32>)
@@ -428,6 +431,13 @@ where
 {
     let d = graph.dimensions;
     let ef = params.ef_search.max(top_k);
+
+    // Destructure for disjoint mutable borrows on each field.
+    let SearchBuffers {
+        visited,
+        candidates,
+        results,
+    } = buffers;
 
     // Safety invariants: vectors and visited list are large enough for all node IDs.
     assert!(vectors.len() >= graph.ntotal * d);
@@ -458,9 +468,9 @@ where
         }
     }
 
-    // Phase 2: Search at level 0 with dual flat-array heaps
-    let mut candidates = FlatMinHeap::new(ef * 2);
-    let mut results = FlatMaxHeap::new(ef);
+    // Phase 2: Search at level 0 — reuse pre-allocated heaps
+    candidates.clear();
+    results.clear();
     visited.reset();
 
     let d_entry = unsafe { dist_fn(query, get_vec(vectors, curr, d)) };
@@ -546,8 +556,8 @@ where
         }
     }
 
-    // Collect results sorted by ascending distance, take top_k
-    let (sorted_ids, sorted_dis) = results.into_sorted();
+    // In-place heap-sort, then collect top_k into return Vecs
+    let (sorted_ids, sorted_dis) = results.drain_sorted();
     let n = top_k.min(sorted_ids.len());
     let labels: Vec<usize> = sorted_ids[..n].iter().map(|&id| id as usize).collect();
     let distances: Vec<f32> = sorted_dis[..n].to_vec();
@@ -557,15 +567,33 @@ where
 
 /// Search the HNSW graph using recomputed distances via a callback.
 ///
-/// The `compute_distance` callback takes `(node_ids, query, out)` and writes
-/// distances into the pre-allocated `out` slice. This avoids Vec allocation
-/// per callback invocation. The callback should use `l2_distance_batch_4`
-/// (or similar) internally to batch-compute distances with SIMD.
+/// Convenience wrapper that allocates fresh buffers. For repeated searches,
+/// use [`search_hnsw_recompute_buf`] to reuse allocations.
 pub fn search_hnsw_recompute<F>(
     graph: &HnswGraph,
     query: &[f32],
     top_k: usize,
     params: &SearchParams,
+    compute_distance: F,
+) -> (Vec<usize>, Vec<f32>)
+where
+    F: FnMut(&[usize], &[f32], &mut [f32]),
+{
+    let mut buffers = SearchBuffers::new(graph.ntotal);
+    search_hnsw_recompute_buf(graph, query, top_k, params, &mut buffers, compute_distance)
+}
+
+/// Search the HNSW graph using recomputed distances, reusing pre-allocated buffers.
+///
+/// The `compute_distance` callback takes `(node_ids, query, out)` and writes
+/// distances into the pre-allocated `out` slice. The callback should use
+/// `l2_distance_batch_4` (or similar) internally to batch-compute distances with SIMD.
+pub fn search_hnsw_recompute_buf<F>(
+    graph: &HnswGraph,
+    query: &[f32],
+    top_k: usize,
+    params: &SearchParams,
+    buffers: &mut SearchBuffers,
     mut compute_distance: F,
 ) -> (Vec<usize>, Vec<f32>)
 where
@@ -573,6 +601,12 @@ where
 {
     let ef = params.ef_search.max(top_k);
     let max_neighbors = graph.neighbors_at_level(0);
+
+    let SearchBuffers {
+        visited,
+        candidates,
+        results,
+    } = buffers;
 
     // Pre-allocate scratch buffers reused across iterations
     let mut node_buf = Vec::with_capacity(max_neighbors + 1);
@@ -613,10 +647,9 @@ where
         }
     }
 
-    // Phase 2: ef-search at level 0 with flat-array heaps
-    let mut candidates = FlatMinHeap::new(ef * 2);
-    let mut results = FlatMaxHeap::new(ef);
-    let mut visited = VisitedList::new(graph.ntotal);
+    // Phase 2: ef-search at level 0 — reuse pre-allocated heaps
+    candidates.clear();
+    results.clear();
     visited.reset();
 
     node_buf.clear();
@@ -673,8 +706,8 @@ where
         }
     }
 
-    // Collect results sorted by ascending distance, take top_k
-    let (sorted_ids, sorted_dis) = results.into_sorted();
+    // In-place heap-sort, then collect top_k into return Vecs
+    let (sorted_ids, sorted_dis) = results.drain_sorted();
     let n = top_k.min(sorted_ids.len());
     let labels: Vec<usize> = sorted_ids[..n].iter().map(|&id| id as usize).collect();
     let distances: Vec<f32> = sorted_dis[..n].to_vec();

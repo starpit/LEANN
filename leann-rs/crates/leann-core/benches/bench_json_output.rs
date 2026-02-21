@@ -17,7 +17,7 @@ use leann_core::hnsw::build::{build_hnsw, build_hnsw_with_pool};
 use leann_core::hnsw::graph::HnswConfig;
 use leann_core::hnsw::io::{read_hnsw_index, write_hnsw_standard};
 use leann_core::hnsw::search::{
-    SearchBuffers, SearchParams, search_hnsw, search_hnsw_buf, search_hnsw_recompute,
+    SearchBuffers, SearchParams, search_hnsw, search_hnsw_buf, search_hnsw_recompute_buf,
 };
 use leann_core::hnsw::simd::{inner_product_distance, l2_distance, l2_distance_batch_4};
 
@@ -310,6 +310,9 @@ fn main() {
         let flat_vectors: Vec<f32> = data.iter().copied().collect();
         let query = gen_query(&mut rng, d);
 
+        // Pre-allocate buffers once, reuse across all recompute search calls
+        let mut recompute_buffers = SearchBuffers::new(graph.ntotal);
+
         for ef in [16, 32, 64, 128, 256] {
             let params = SearchParams {
                 ef_search: ef,
@@ -319,11 +322,12 @@ fn main() {
             let flat_ref = &flat_vectors;
             let times = bench_fn(
                 || {
-                    let _ = search_hnsw_recompute(
+                    let _ = search_hnsw_recompute_buf(
                         &graph,
                         &query,
                         top_k,
                         &params,
+                        &mut recompute_buffers,
                         |node_ids, q, out| {
                             let n = node_ids.len();
                             let mut i = 0;
