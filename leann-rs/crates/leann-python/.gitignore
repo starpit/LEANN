@@ -1,0 +1,6 @@
+# Override root gitignore rule that excludes test_*.py
+!tests/test_*.py
+
+# maturin develop build artifacts
+python/leann/*.so
+python/leann/*.pyd
