@@ -188,6 +188,62 @@ impl LlmProvider for AnthropicChat {
     }
 }
 
+/// Google Gemini LLM chat backend.
+pub struct GeminiChat {
+    model: String,
+    api_key: String,
+    client: reqwest::blocking::Client,
+}
+
+impl GeminiChat {
+    pub fn new(model: &str, api_key: Option<&str>) -> Result<Self> {
+        let api_key = settings::resolve_gemini_api_key(api_key)
+            .ok_or_else(|| anyhow::anyhow!("Gemini API key required. Set GEMINI_API_KEY environment variable or pass api_key parameter."))?;
+
+        Ok(Self {
+            model: model.to_string(),
+            api_key,
+            client: reqwest::blocking::Client::new(),
+        })
+    }
+}
+
+impl LlmProvider for GeminiChat {
+    fn ask(&self, prompt: &str, params: &LlmParams) -> Result<String> {
+        let mut generation_config = serde_json::json!({
+            "temperature": params.temperature.unwrap_or(0.7),
+            "maxOutputTokens": params.max_tokens.unwrap_or(1000),
+        });
+
+        if let Some(top_p) = params.top_p {
+            generation_config["topP"] = serde_json::json!(top_p);
+        }
+
+        let payload = serde_json::json!({
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": generation_config,
+        });
+
+        let url = format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+            self.model, self.api_key
+        );
+
+        let response = self
+            .client
+            .post(&url)
+            .json(&payload)
+            .send()?;
+
+        let body: serde_json::Value = response.json()?;
+        Ok(body["candidates"][0]["content"]["parts"][0]["text"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .to_string())
+    }
+}
+
 /// Simulated LLM for testing.
 pub struct SimulatedChat;
 
@@ -216,6 +272,10 @@ pub fn get_llm(config: &LlmConfig) -> Result<Box<dyn LlmProvider>> {
                 .unwrap_or("claude-3-5-sonnet-20241022"),
             config.api_key.as_deref(),
             config.base_url.as_deref(),
+        )?)),
+        "gemini" => Ok(Box::new(GeminiChat::new(
+            config.model.as_deref().unwrap_or("gemini-2.5-flash"),
+            config.api_key.as_deref(),
         )?)),
         "simulated" => Ok(Box::new(SimulatedChat)),
         other => anyhow::bail!("Unknown LLM type: {}", other),

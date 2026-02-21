@@ -254,7 +254,7 @@ PyO3 0.25 used for leann-python (standalone crate, Python 3.14 compatible).
 - `OllamaChat`, `OpenAiChat`, `AnthropicChat`, `SimulatedChat` implementations
 - `get_llm` factory from `LlmConfig`
 - `LeannChat`: wraps searcher + LLM, formats context prompt
-- Note: `GeminiChat` not yet implemented (Gemini embedding works, but chat LLM provider pending)
+- `GeminiChat`: Gemini REST API (`generateContent` endpoint) with temperature/maxOutputTokens/topP
 
 ### 5d. ReAct Agent (`react_agent.rs`) [COMPLETE]
 - Multi-turn search-reason-answer loop
@@ -321,9 +321,7 @@ PyO3 0.25 used for leann-python (standalone crate, Python 3.14 compatible).
 - `python/leann/__init__.py` with re-exports
 
 ### Not yet done:
-- [ ] Maturin end-to-end build test
-- [ ] Python type stubs (.pyi files)
-- [ ] Python example scripts (basic_demo.py, document_rag.py, code_rag.py)
+- [ ] Maturin end-to-end build test (includes verifying existing Python example scripts work unchanged — the PyO3 API is a drop-in replacement for the Python API; generate `.pyi` type stubs for IDE support)
 
 ---
 
@@ -584,18 +582,16 @@ Uses `axum::test` helpers or spawns server on a random port.
 ### High Priority
 1. **ONNX Runtime activation** — Wire up `ort` crate for local sentence-transformer inference (currently scaffold only)
 2. ~~**End-to-end tests**~~ — DONE: 82 integration tests + 11 CLI/server tests (157 total). Remaining gap: CLI build+search subprocess tests, embedding server lifecycle tests, Python format compat tests
-3. **GeminiChat LLM provider** — Chat backend for Gemini (embedding provider is done)
+3. ~~**GeminiChat LLM provider**~~ — DONE: `GeminiChat` in `chat.rs` using Gemini REST API (`generateContent` endpoint), wired into `get_llm` factory with `"gemini"` type
 4. ~~**PDF document loading**~~ — DONE: `pdf-extract` crate via `document_loaders` module with `pdf` feature flag
-5. **Maturin build test** — Verify PyO3 bindings produce a working Python wheel
+5. **Maturin build test** — Verify PyO3 bindings produce a working Python wheel; validate existing Python example scripts work unchanged (API is a drop-in replacement); generate `.pyi` type stubs for IDE support (compiled `.so` modules aren't introspectable without them)
 
 ### Medium Priority
-6. **Python example scripts** — Port basic_demo.py, document_rag.py, code_rag.py to use Rust bindings
-7. **Python type stubs** — Generate .pyi files for IDE support
-8. **CI setup** — GitHub Actions for cargo test, clippy, maturin build (Linux x86_64, macOS ARM64)
-9. **Incremental rebuild in watch** — Currently watch detects changes but doesn't rebuild
-10. **Tree-sitter integration** — Replace heuristic AST chunking with real tree-sitter parsing
+6. **CI setup** — GitHub Actions for cargo test, clippy, maturin build (Linux x86_64, macOS ARM64)
+7. **Tree-sitter integration** — Replace heuristic AST chunking with real tree-sitter parsing
 
 ### Low Priority / Deferred
+10. **Incremental server-side re-indexing** — Server watches corpus directory and auto-rebuilds on file changes (requires incremental HNSW insert/delete or full rebuild; future feature, not port debt)
 11. **DiskANN backend** — Deferred per plan; HNSW-only for now
 12. **Format compatibility tests** — Reading indexes built by the Python version
 13. ~~**Recall benchmarks**~~ — DONE: Criterion benchmark suite + Rust vs Python comparison at `benchmarks/` (distance, build, search, recompute, full pipeline, index size). HNSW performance optimization complete: SIMD (NEON/AVX2), batch-4 distance, parallel build, flat heaps, visited list, early termination.
