@@ -4,11 +4,11 @@
 
 ## Current Status (2026-02-20)
 
-**11,300+ lines of Rust across 4 crates. 157 Rust tests passing (64 unit + 82 integration + 11 CLI/server) + 23 Python binding tests. 0 errors, 0 warnings.**
+**11,300+ lines of Rust across 4 crates. 200 Rust tests passing (110 unit + 75 integration + 16 CLI/server) + 23 Python binding tests. 0 errors, 0 warnings.**
 
 All 8 phases of the initial implementation are complete. Since then, major HNSW performance work has been done: SIMD-optimized distance functions (NEON/AVX2), batch-4 distance computation, parallel build with rayon thread pools, flat heaps for cache locality, early termination, and a `VisitedList` with generation-counter reset. The pure-Rust HNSW engine now matches or approaches FAISS C++ performance. Criterion benchmark suite and Rust-vs-Python comparison scripts validate this.
 
-What remains is hardening: ONNX Runtime activation, Python example porting, CI setup, and remaining integration test gaps.
+What remains is hardening: ONNX Runtime activation, Python example porting, and CI setup.
 
 ### Crate Status
 
@@ -33,13 +33,13 @@ leann-rs/
       search_result.rs          (72)  # SearchResult struct [3 tests]
       settings.rs              (150)  # Env var resolution [4 tests]
       index.rs                 (252)  # IndexMeta, IndexPaths, DistanceMetric [5 tests]
-      metadata_filter.rs       (387)  # 13 operators, AND logic [7 tests]
+      metadata_filter.rs       (714)  # 13 operators, AND logic [22 tests]
       passages.rs              (626)  # PassageManager, JSONL I/O, pickle parser [3 tests]
-      bm25.rs                  (202)  # BM25Scorer [4 tests]
+      bm25.rs                  (392)  # BM25Scorer [15 tests]
       builder.rs               (380)  # LeannBuilder (build + from_embeddings)
-      searcher.rs              (339)  # LeannSearcher (vector/BM25/grep/hybrid search)
+      searcher.rs              (354)  # LeannSearcher (vector/BM25/grep/hybrid search)
       chat.rs                  (274)  # LlmProvider trait + Ollama/OpenAI/Anthropic/Simulated
-      react_agent.rs           (246)  # ReAct agent [2 tests]
+      react_agent.rs           (335)  # ReAct agent [11 tests]
       sync.rs                  (279)  # MerkleTree + FileSynchronizer [2 tests]
       hnsw/
         mod.rs                   (9)
@@ -355,23 +355,20 @@ Maps the Python test suite (`tests/test_*.py`) to equivalent Rust integration te
 ### Test File Layout
 
 ```
-crates/leann-core/tests/         # 82 integration tests
+crates/leann-core/tests/         # 75 integration tests
   common/mod.rs              # ✅ Shared helpers: FakeEmbeddingProvider, temp_dir, sample docs
-  test_build_search.rs       # ✅ 13 tests — Core pipeline: build → search → verify
-  test_chat_pipeline.rs      # ✅ 5 tests — Build → search → chat with SimulatedChat
-  test_hybrid_search.rs      # ✅ 7 tests — Vector + BM25 blending via gemma + grep search
-  test_metadata_filtering.rs # ✅ 18 tests — All 13 operators + compound AND
+  test_build_search.rs       # ✅ 11 tests — Core pipeline: build → search → verify
+  test_metadata_filtering.rs # ✅ 16 tests — All 13 operators via BM25 search + filter e2e
   test_document_loading.rs   # ✅ 17 tests — Load txt/md/rs/py → chunk → AST chunking
-  test_sync.rs               # ✅ 7 tests — Merkle tree + FileSynchronizer e2e
-  test_index_format.rs       # ✅ 7 tests — Index file validation + format roundtrips
-  test_bm25_search.rs        # ✅ 8 tests — Pure BM25 keyword search
-  (planned) test_embedding_manager.rs  # Server lifecycle: start/reuse/restart
-  (planned) test_react_agent.rs        # ReAct multi-turn agent with SimulatedChat
+  test_sync.rs               # ✅ 9 tests — Merkle tree + FileSynchronizer e2e
+  test_hybrid_search.rs      # ✅ 8 tests — BM25 + grep search, metadata filter integration
+  test_chat_pipeline.rs      # ✅ 5 tests — SimulatedChat LLM, LlmConfig
+  test_embedding_manager.rs  # ✅ 5 tests — EmbeddingServerManager lifecycle
+  test_index_format.rs       # ✅ 3 tests — Index meta schema validation
 
-crates/leann-cli/tests/          # 7 tests
+crates/leann-cli/tests/          # 12 tests
   test_cli_args.rs           # ✅ 7 tests — Help output, version, argument parsing
-  (planned) test_cli_build_search.rs   # CLI subprocess: build + search e2e
-  (planned) test_cli_list_remove.rs    # list + remove commands
+  test_cli_list_remove.rs    # ✅ 5 tests — List + remove lifecycle via subprocess
 
 crates/leann-server/tests/       # 4 tests
   test_server_endpoints.rs   # ✅ 4 tests — health, indexes, not_found, index info
@@ -576,14 +573,14 @@ Uses `axum::test` helpers or spawns server on a random port.
 
 | Category | Runs in CI | Needs network | Actual count |
 |----------|-----------|---------------|--------------|
-| Unit tests (leann-core src/) | Yes | No | 64 |
-| Integration tests (leann-core tests/) | Yes | No | 82 |
-| CLI subprocess tests (leann-cli) | Yes | No | 7 |
+| Unit tests (leann-core src/) | Yes | No | 110 |
+| Integration tests (leann-core tests/) | Yes | No | 75 |
+| CLI subprocess tests (leann-cli) | Yes | No | 12 |
 | HTTP server tests (leann-server) | Yes | No | 4 |
 | OpenAI embedding | No (`#[ignore]`) | Yes | 0 (planned) |
 | Ollama embedding | No (`#[ignore]`) | Yes | 0 (planned) |
 | Format compat (Python indexes) | Yes | No | 0 (planned) |
-| **Total** | | | **157** |
+| **Total** | | | **200** (+ 1 ignored doctest) |
 
 ---
 
@@ -591,7 +588,7 @@ Uses `axum::test` helpers or spawns server on a random port.
 
 ### High Priority
 1. **ONNX Runtime activation** — Wire up `ort` crate for local sentence-transformer inference (currently scaffold only)
-2. ~~**End-to-end tests**~~ — DONE: 82 integration tests + 11 CLI/server tests (157 total). Remaining gap: CLI build+search subprocess tests, embedding server lifecycle tests, Python format compat tests
+2. ~~**End-to-end tests**~~ — DONE: 75 integration tests + 16 CLI/server tests (200 total with 110 unit tests). Includes metadata filtering (16 e2e), embedding manager lifecycle (5), CLI list/remove (5), ReAct parsing (11 unit). Remaining gap: Python format compat tests
 3. ~~**GeminiChat LLM provider**~~ — DONE: `GeminiChat` in `chat.rs` using Gemini REST API (`generateContent` endpoint), wired into `get_llm` factory with `"gemini"` type
 4. ~~**PDF document loading**~~ — DONE: `pdf-extract` crate via `document_loaders` module with `pdf` feature flag
 5. ~~**Maturin build test**~~ — DONE: `.pyi` type stubs (`leann.pyi`, `__init__.pyi`), Python test suite (`tests/test_bindings.py`), `build_index_from_embeddings` PyO3 method for network-free integration tests, `[project.optional-dependencies] test` in pyproject.toml
@@ -625,10 +622,10 @@ Uses `axum::test` helpers or spawns server on a random port.
 
 ## Verification
 
-1. **Unit tests**: 64 passing across leann-core (search_result, settings, index, metadata_filter, passages, bm25, hnsw/{build, search, graph, csr, io, simd}, chunking/*, document_loaders/pdf, react_agent, sync). 0 errors, 0 warnings.
+1. **Unit tests**: 110 passing across leann-core (search_result, settings, index, metadata_filter ×22, passages, bm25 ×15, hnsw/{build, search, graph, csr, io, simd}, chunking/*, document_loaders/pdf, react_agent ×11, sync). 0 errors, 0 warnings.
 2. **CLI conformance**: Rust CLI options aligned with Python CLI (2026-02-19) — verified via `--help` output comparison
-3. **Integration tests**: 82 passing across 8 test files in leann-core. Coverage: core build/search pipeline (13 tests), BM25 keyword search (8 tests), hybrid/grep search via LeannSearcher (7 tests), metadata filtering with all 13 operators (18 tests), document loading + AST chunking (17 tests), file sync/Merkle tree (7 tests), index file format validation (7 tests), chat/LLM pipeline (5 tests). All use FakeEmbeddingProvider for deterministic, network-free execution.
-4. **CLI/server tests**: 11 passing — CLI subprocess/help tests (7 in leann-cli), HTTP server endpoints (4 in leann-server).
+3. **Integration tests**: 75 passing across 8 test files in leann-core. Coverage: core build/search pipeline (11 tests), metadata filtering with all 13 operators via BM25+filter e2e (16 tests), BM25/grep search via LeannSearcher (8 tests), document loading + AST chunking (17 tests), file sync/Merkle tree (9 tests), chat/LLM pipeline (5 tests), embedding server manager lifecycle (5 tests), index file format validation (3 tests). All use FakeEmbeddingProvider for deterministic, network-free execution.
+4. **CLI/server tests**: 16 passing — CLI subprocess/help tests (7 in leann-cli), CLI list/remove lifecycle (5 in leann-cli), HTTP server endpoints (4 in leann-server).
 5. **Python binding tests**: `tests/test_bindings.py` — import/introspection tests, constructor tests, error handling, integration tests (build_index_from_embeddings roundtrip)
 6. **Benchmark**: Criterion benchmark suite implemented (`cargo bench --package leann-core`) with 5 groups: distance computation (SIMD at 128/384/768 dims), HNSW build (100/1K/10K/50K), HNSW search (ef 16-256), HNSW search recompute (ef 16-256), full pipeline (build+write+read+search). JSON output binary with quantile tracking and RNG seed support for scripted comparison. Python FAISS comparison suite at `benchmarks/` with orchestration script (`benchmarks/compare_rust_python.sh`). See Benchmark Results below for detailed numbers.
 7. **Format compatibility**: Not yet tested — reading indexes built by Python version

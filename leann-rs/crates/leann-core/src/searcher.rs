@@ -249,8 +249,6 @@ impl LeannSearcher {
     }
 
     fn bm25_search(&self, query: &str, top_k: usize) -> Result<Vec<SearchResult>> {
-        // TODO: Initialize BM25 lazily on first use
-        // For now, create a fresh one each time (not ideal for perf)
         let mut scorer = BM25Scorer::default();
 
         let mut documents = Vec::new();
@@ -267,7 +265,17 @@ impl LeannSearcher {
         }
 
         scorer.fit(&documents);
-        Ok(scorer.search(query, top_k))
+        let mut results = scorer.search(query, top_k);
+
+        // Enrich results with passage text and metadata
+        for result in &mut results {
+            if let Ok(passage) = self.passages.get_passage(&result.id) {
+                result.text = passage.text;
+                result.metadata = passage.metadata;
+            }
+        }
+
+        Ok(results)
     }
 
     fn grep_search(&self, query: &str, top_k: usize) -> Result<Vec<SearchResult>> {

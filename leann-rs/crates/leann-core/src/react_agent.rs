@@ -243,4 +243,93 @@ mod tests {
         assert_eq!(thought, "I have enough info.");
         assert!(action.is_none());
     }
+
+    #[test]
+    fn test_parse_llm_response_single_quotes() {
+        let response = "Thought: Looking for data.\nAction: search('vector database')";
+        let (thought, action) = parse_llm_response(response);
+        assert_eq!(thought, "Looking for data.");
+        assert_eq!(action, Some("vector database".to_string()));
+    }
+
+    #[test]
+    fn test_parse_llm_response_no_thought_prefix() {
+        let response = "Action: search(\"embeddings\")";
+        let (thought, action) = parse_llm_response(response);
+        assert!(thought.is_empty());
+        assert_eq!(action, Some("embeddings".to_string()));
+    }
+
+    #[test]
+    fn test_parse_llm_response_final_answer_without_thought() {
+        let response = "Final Answer: The answer is 42.";
+        let (_thought, action) = parse_llm_response(response);
+        assert!(action.is_none());
+    }
+
+    #[test]
+    fn test_parse_llm_response_empty_string() {
+        let (thought, action) = parse_llm_response("");
+        assert!(thought.is_empty());
+        assert!(action.is_none());
+    }
+
+    #[test]
+    fn test_parse_llm_response_no_action_or_final() {
+        let response = "Thought: I'm just thinking out loud.";
+        let (thought, action) = parse_llm_response(response);
+        assert_eq!(thought, "I'm just thinking out loud.");
+        assert!(action.is_none());
+    }
+
+    #[test]
+    fn test_format_search_results_empty() {
+        let results = format_search_results(&[]);
+        assert_eq!(results, "No results found.");
+    }
+
+    #[test]
+    fn test_format_search_results_single() {
+        let results = vec![SearchResult {
+            id: "1".to_string(),
+            score: 0.95,
+            text: "HNSW is a graph-based algorithm.".to_string(),
+            metadata: Default::default(),
+        }];
+        let formatted = format_search_results(&results);
+        assert!(formatted.contains("[Result 1]"));
+        assert!(formatted.contains("0.950"));
+        assert!(formatted.contains("HNSW is a graph-based algorithm."));
+    }
+
+    #[test]
+    fn test_format_search_results_with_source_metadata() {
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert(
+            "source".to_string(),
+            serde_json::Value::String("docs/readme.md".to_string()),
+        );
+        let results = vec![SearchResult {
+            id: "1".to_string(),
+            score: 0.8,
+            text: "Some text".to_string(),
+            metadata,
+        }];
+        let formatted = format_search_results(&results);
+        assert!(formatted.contains("Source: docs/readme.md"));
+    }
+
+    #[test]
+    fn test_format_search_results_truncates_long_text() {
+        let long_text = "x".repeat(600);
+        let results = vec![SearchResult {
+            id: "1".to_string(),
+            score: 0.5,
+            text: long_text,
+            metadata: Default::default(),
+        }];
+        let formatted = format_search_results(&results);
+        assert!(formatted.contains("..."));
+        assert!(formatted.len() < 700);
+    }
 }
