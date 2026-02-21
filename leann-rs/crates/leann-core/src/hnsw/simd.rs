@@ -5,7 +5,7 @@ use ndarray::Array2;
 /// Compute L2 squared distance between two slices.
 #[inline]
 pub fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(a.len(), b.len());
+    debug_assert_eq!(a.len(), b.len());
     #[cfg(target_arch = "aarch64")]
     {
         unsafe { l2_distance_neon(a, b) }
@@ -200,7 +200,7 @@ unsafe fn l2_distance_avx2(a: &[f32], b: &[f32]) -> f32 {
 /// Compute negated inner product distance (lower = more similar).
 #[inline]
 pub fn inner_product_distance(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(a.len(), b.len());
+    debug_assert_eq!(a.len(), b.len());
     #[cfg(target_arch = "aarch64")]
     {
         unsafe { inner_product_distance_neon(a, b) }
@@ -894,6 +894,29 @@ impl VisitedList {
             #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
             {
                 let _ = ptr; // no-op on unsupported architectures
+            }
+        }
+    }
+
+    /// Issue a hardware prefetch into L2 cache (not L1).
+    /// Less aggressive than `prefetch` — avoids polluting the small L1 cache.
+    /// Useful in pre-scan passes where the actual access comes later.
+    #[inline(always)]
+    pub fn prefetch_l2(&self, node: usize) {
+        debug_assert!(node < self.visited.len());
+        unsafe {
+            let ptr = self.visited.as_ptr().add(node) as *const u8;
+            #[cfg(target_arch = "aarch64")]
+            {
+                std::arch::asm!("prfm pldl2keep, [{ptr}]", ptr = in(reg) ptr, options(nostack, preserves_flags));
+            }
+            #[cfg(target_arch = "x86_64")]
+            {
+                std::arch::x86_64::_mm_prefetch(ptr as *const i8, std::arch::x86_64::_MM_HINT_T1);
+            }
+            #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+            {
+                let _ = ptr;
             }
         }
     }

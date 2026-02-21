@@ -494,7 +494,15 @@ where
 
         let neighbors = graph.get_neighbors(cand_id as usize, 0);
 
-        // Check visited + accumulate batches of 4 for distance
+        // Pass 1: prefetch visited-list entries into L2 cache
+        for &nb in neighbors {
+            if nb < 0 {
+                break;
+            }
+            visited.prefetch_l2(nb as usize);
+        }
+
+        // Pass 2: check visited + accumulate batches of 4 for distance
         let mut counter = 0;
         for &nb in neighbors {
             if nb < 0 {
@@ -506,6 +514,28 @@ where
 
             saved[counter] = nb as u32;
             counter += 1;
+
+            // Prefetch this vector's data so it's in cache by the time batch_4 runs.
+            // First 2 cache lines (128 bytes = 32 floats); the HW prefetcher handles the rest.
+            unsafe {
+                let vptr = vectors.as_ptr().add(nb as usize * d) as *const u8;
+                #[cfg(target_arch = "aarch64")]
+                {
+                    std::arch::asm!("prfm pldl1keep, [{ptr}]", ptr = in(reg) vptr, options(nostack, preserves_flags));
+                    std::arch::asm!("prfm pldl1keep, [{ptr}]", ptr = in(reg) vptr.add(64), options(nostack, preserves_flags));
+                }
+                #[cfg(target_arch = "x86_64")]
+                {
+                    std::arch::x86_64::_mm_prefetch(
+                        vptr as *const i8,
+                        std::arch::x86_64::_MM_HINT_T0,
+                    );
+                    std::arch::x86_64::_mm_prefetch(
+                        vptr.add(64) as *const i8,
+                        std::arch::x86_64::_MM_HINT_T0,
+                    );
+                }
+            }
 
             if counter == 4 {
                 let dists = unsafe {
