@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use crate::index::PassageSource;
@@ -18,10 +18,16 @@ pub struct Passage {
     pub metadata: HashMap<String, serde_json::Value>,
 }
 
+/// Per-shard data: open file handle + byte offsets.
+struct Shard {
+    path: PathBuf,
+    file: File,
+    offsets: Vec<u64>,
+}
+
 /// Manages passage storage and retrieval using JSONL files with offset-based random access.
 pub struct PassageManager {
-    /// Per-shard offset maps: passage_file_path -> (passage_id -> byte_offset)
-    offset_maps: HashMap<PathBuf, HashMap<String, u64>>,
+    shards: Vec<Shard>,
     /// Total number of passages across all shards.
     total_count: usize,
     /// Filter engine for metadata filtering.
@@ -34,7 +40,7 @@ impl PassageManager {
         passage_sources: &[PassageSource],
         metadata_file_path: Option<&Path>,
     ) -> Result<Self> {
-        let mut offset_maps: HashMap<PathBuf, HashMap<String, u64>> = HashMap::new();
+        let mut shards = Vec::new();
         let mut total_count = 0;
 
         // Derive index base name for standard sibling fallbacks
@@ -79,36 +85,44 @@ impl PassageManager {
                 index_file.display()
             );
 
-            // Load the offset map (bincode or JSON format)
-            let offset_map = load_offset_map(&index_file)?;
-            total_count += offset_map.len();
-            offset_maps.insert(passage_file, offset_map);
+            let offsets = load_offsets(&index_file)?;
+            total_count += offsets.len();
+            let file = File::open(&passage_file)
+                .with_context(|| format!("opening {}", passage_file.display()))?;
+            shards.push(Shard {
+                path: passage_file,
+                file,
+                offsets,
+            });
         }
 
         Ok(Self {
-            offset_maps,
+            shards,
             total_count,
             filter_engine: MetadataFilterEngine::new(),
         })
     }
 
-    /// Get a single passage by ID.
-    pub fn get_passage(&self, passage_id: &str) -> Result<Passage> {
-        for (passage_file, offset_map) in &self.offset_maps {
-            if let Some(&offset) = offset_map.get(passage_id) {
-                let mut file = File::open(passage_file)
-                    .with_context(|| format!("opening {}", passage_file.display()))?;
-                file.seek(SeekFrom::Start(offset))?;
-                let mut reader = BufReader::new(file);
+    /// Get a single passage by positional index (matching ID map order).
+    pub fn get_passage_by_index(&self, idx: usize) -> Result<Passage> {
+        let mut remaining = idx;
+        for shard in &self.shards {
+            if remaining < shard.offsets.len() {
+                let offset = shard.offsets[remaining];
+                // Reuse the open file handle; &File implements Read/Seek
+                // (kernel file offset is per-fd, but we seek before each read).
+                let mut reader = BufReader::new(&shard.file);
+                reader.seek(SeekFrom::Start(offset))?;
                 let mut line = String::new();
                 reader.read_line(&mut line)?;
                 let passage: Passage = serde_json::from_str(&line).with_context(|| {
-                    format!("parsing passage {} at offset {}", passage_id, offset)
+                    format!("parsing passage at index {} offset {}", idx, offset)
                 })?;
                 return Ok(passage);
             }
+            remaining -= shard.offsets.len();
         }
-        anyhow::bail!("Passage ID not found: {}", passage_id)
+        anyhow::bail!("Passage index out of bounds: {}", idx)
     }
 
     /// Filter search results by metadata.
@@ -169,31 +183,34 @@ impl PassageManager {
 
     /// Iterator over all passage file paths.
     pub fn passage_files(&self) -> impl Iterator<Item = &Path> {
-        self.offset_maps.keys().map(|p| p.as_path())
+        self.shards.iter().map(|s| s.path.as_path())
     }
 }
 
-/// Write passages to JSONL and create an offset map.
+/// Write passages to JSONL and create an offset file.
+/// Returns the byte offsets in insertion order.
 pub fn write_passages(
     chunks: &[Passage],
     passages_path: &Path,
     offset_path: &Path,
-) -> Result<HashMap<String, u64>> {
+) -> Result<Vec<u64>> {
     let mut file = File::create(passages_path)?;
-    let mut offset_map = HashMap::new();
+    let mut offsets = Vec::with_capacity(chunks.len());
 
     for chunk in chunks {
         let offset = file.stream_position()?;
         serde_json::to_writer(&mut file, chunk)?;
         file.write_all(b"\n")?;
-        offset_map.insert(chunk.id.clone(), offset);
+        offsets.push(offset);
     }
 
-    // Write offset map using bincode
-    let offset_file = File::create(offset_path)?;
-    bincode::serialize_into(offset_file, &offset_map)?;
+    // Write offsets as one u64 per line
+    let mut offset_file = File::create(offset_path)?;
+    for &o in &offsets {
+        writeln!(offset_file, "{}", o)?;
+    }
 
-    Ok(offset_map)
+    Ok(offsets)
 }
 
 /// Write the ID map file (one ID per line, in order).
@@ -268,24 +285,22 @@ fn pick_existing(candidates: &[PathBuf]) -> Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("No path candidates provided"))
 }
 
-/// Load offset map from bincode or JSON format.
-fn load_offset_map(path: &Path) -> Result<HashMap<String, u64>> {
-    let mut file = File::open(path)?;
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf)?;
-
-    if let Ok(map) = bincode::deserialize::<HashMap<String, u64>>(&buf) {
-        return Ok(map);
+/// Load offsets from a text file (one u64 per line).
+fn load_offsets(path: &Path) -> Result<Vec<u64>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut offsets = Vec::new();
+    for line in reader.lines() {
+        let line = line?;
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            let offset: u64 = trimmed
+                .parse()
+                .with_context(|| format!("parsing offset '{}' in {}", trimmed, path.display()))?;
+            offsets.push(offset);
+        }
     }
-
-    if let Ok(map) = serde_json::from_slice::<HashMap<String, u64>>(&buf) {
-        return Ok(map);
-    }
-
-    anyhow::bail!(
-        "Failed to parse offset map at {} (expected bincode or JSON)",
-        path.display()
-    )
+    Ok(offsets)
 }
 
 #[cfg(test)]
@@ -315,8 +330,8 @@ mod tests {
             },
         ];
 
-        let offset_map = write_passages(&passages, &passages_path, &offset_path).unwrap();
-        assert_eq!(offset_map.len(), 2);
+        let offsets = write_passages(&passages, &passages_path, &offset_path).unwrap();
+        assert_eq!(offsets.len(), 2);
 
         // Now load and verify
         let sources = vec![PassageSource {
@@ -330,10 +345,10 @@ mod tests {
         let manager = PassageManager::load(&sources, None).unwrap();
         assert_eq!(manager.len(), 2);
 
-        let p0 = manager.get_passage("0").unwrap();
+        let p0 = manager.get_passage_by_index(0).unwrap();
         assert_eq!(p0.text, "Hello world");
 
-        let p1 = manager.get_passage("1").unwrap();
+        let p1 = manager.get_passage_by_index(1).unwrap();
         assert_eq!(p1.text, "Rust is great");
         assert_eq!(
             p1.metadata.get("source"),
@@ -364,7 +379,7 @@ mod tests {
         }];
 
         let manager = PassageManager::load(&sources, None).unwrap();
-        assert!(manager.get_passage("999").is_err());
+        assert!(manager.get_passage_by_index(999).is_err());
     }
 
     #[test]
@@ -531,8 +546,8 @@ mod tests {
             })
             .collect();
 
-        let offset_map = write_passages(&passages, &passages_path, &offset_path).unwrap();
-        assert_eq!(offset_map.len(), 20);
+        let offsets = write_passages(&passages, &passages_path, &offset_path).unwrap();
+        assert_eq!(offsets.len(), 20);
 
         let sources = vec![PassageSource {
             source_type: "jsonl".to_string(),
@@ -545,10 +560,10 @@ mod tests {
         let manager = PassageManager::load(&sources, None).unwrap();
 
         for i in [15, 3, 0, 19, 7, 12] {
-            let p = manager.get_passage(&format!("p_{}", i)).unwrap();
+            let p = manager.get_passage_by_index(i).unwrap();
             assert!(
                 p.text.contains(&format!("Passage number {}", i)),
-                "Wrong passage for p_{}: '{}'",
+                "Wrong passage for index {}: '{}'",
                 i,
                 p.text
             );
@@ -608,12 +623,12 @@ mod tests {
             PassageManager::load(&meta.passage_sources, Some(&paths.meta_path())).unwrap();
         assert_eq!(manager.len(), 30);
 
-        let p0 = manager.get_passage("0").unwrap();
+        let p0 = manager.get_passage_by_index(0).unwrap();
         assert!(p0.text.contains("document 0"));
 
-        let p15 = manager.get_passage("15").unwrap();
+        let p15 = manager.get_passage_by_index(15).unwrap();
         assert!(p15.text.contains("document 15"));
 
-        assert!(manager.get_passage("999").is_err());
+        assert!(manager.get_passage_by_index(999).is_err());
     }
 }

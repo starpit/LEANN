@@ -174,7 +174,7 @@ fn main() {
     // ── Distance computation ────────────────────────────────────────
     // Batch multiple calls per timing interval to overcome Instant::now() overhead
     // (~20-50ns on macOS), which would drown out sub-100ns operations.
-    eprintln!("\n[1/5] Distance computation...");
+    eprintln!("\n[1/6] Distance computation...");
     let dist_batch = 1000;
     for dim in [128, 384, 768] {
         let mut rng = StdRng::seed_from_u64(42);
@@ -211,7 +211,7 @@ fn main() {
     }
 
     // ── HNSW build ──────────────────────────────────────────────────
-    eprintln!("[2/5] HNSW build...");
+    eprintln!("[2/6] HNSW build...");
     let config = HnswConfig {
         m: 32,
         ef_construction: 200,
@@ -251,7 +251,7 @@ fn main() {
     }
 
     // ── HNSW search (stored vectors) ────────────────────────────────
-    eprintln!("[3/5] HNSW search (stored vectors)...");
+    eprintln!("[3/6] HNSW search (stored vectors)...");
     {
         let n = 10_000;
         let d = 384;
@@ -293,7 +293,7 @@ fn main() {
     }
 
     // ── HNSW search (recompute) ─────────────────────────────────────
-    eprintln!("[4/5] HNSW search (recompute with in-memory callback)...");
+    eprintln!("[4/6] HNSW search (recompute with in-memory callback)...");
     {
         let n = 10_000;
         let d = 384;
@@ -359,7 +359,7 @@ fn main() {
     }
 
     // ── Full pipeline (build + write + read + search) ───────────────
-    eprintln!("[5/5] Full pipeline...");
+    eprintln!("[5/6] Full pipeline...");
     {
         let d = 384;
         let top_k = 10;
@@ -400,6 +400,77 @@ fn main() {
             results.insert(
                 format!("index_size_bytes/{n}"),
                 BenchResult::from_size(buf.len() as f64),
+            );
+        }
+    }
+
+    // ── Passage lookup ────────────────────────────────────────────────
+    eprintln!("[6/6] Passage lookup...");
+    {
+        use leann_core::index::PassageSource;
+        use leann_core::passages::{Passage, PassageManager, write_id_map, write_passages};
+
+        for n in [1_000, 10_000] {
+            eprintln!("  Passage lookup n={n}...");
+            let dir = tempfile::tempdir().unwrap();
+            let passages_path = dir.path().join("test.passages.jsonl");
+            let offset_path = dir.path().join("test.passages.idx");
+            let id_map_path = dir.path().join("test.ids.txt");
+
+            // Create passages with realistic-ish text
+            let passages: Vec<Passage> = (0..n)
+                .map(|i| {
+                    let mut metadata = std::collections::HashMap::new();
+                    metadata.insert("doc_num".to_string(), serde_json::json!(i));
+                    metadata.insert(
+                        "topic".to_string(),
+                        serde_json::json!(format!("topic_{}", i % 10)),
+                    );
+                    Passage {
+                        id: i.to_string(),
+                        text: format!(
+                            "This is document number {} about topic {}. It contains some text \
+                             that is representative of a typical passage in a RAG system.",
+                            i,
+                            i % 10
+                        ),
+                        metadata,
+                    }
+                })
+                .collect();
+
+            let ids: Vec<String> = passages.iter().map(|p| p.id.clone()).collect();
+            write_passages(&passages, &passages_path, &offset_path).unwrap();
+            write_id_map(&ids, &id_map_path).unwrap();
+
+            let sources = vec![PassageSource {
+                source_type: "jsonl".to_string(),
+                path: passages_path.to_string_lossy().to_string(),
+                index_path: offset_path.to_string_lossy().to_string(),
+                path_relative: None,
+                index_path_relative: None,
+            }];
+
+            let manager = PassageManager::load(&sources, None).unwrap();
+
+            // Generate random lookup indices
+            let mut rng = StdRng::seed_from_u64(42);
+            let lookup_indices: Vec<usize> = (0..1000)
+                .map(|_| (rng.random::<f32>() * n as f32) as usize % n)
+                .collect();
+
+            let times = bench_fn(
+                || {
+                    for &idx in &lookup_indices {
+                        black_box(manager.get_passage_by_index(idx).unwrap());
+                    }
+                },
+                5,
+                100,
+            );
+            results.insert(
+                format!("passage_lookup/{n}"),
+                BenchResult::from_times(&times).scaled(1.0 / lookup_indices.len() as f64),
             );
         }
     }

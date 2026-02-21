@@ -10,7 +10,7 @@ use crate::hnsw::graph::HnswGraph;
 use crate::hnsw::io::read_hnsw_index;
 use crate::hnsw::search::{SearchParams, search_hnsw_recompute};
 use crate::index::{DistanceMetric, IndexMeta, IndexPaths};
-use crate::passages::{PassageManager, load_id_map};
+use crate::passages::{Passage, PassageManager, load_id_map};
 use crate::search_result::SearchResult;
 
 /// High-level searcher for LEANN indexes.
@@ -176,11 +176,11 @@ impl LeannSearcher {
             )
         };
 
-        // Map labels to string IDs and enrich with passages
+        // Map labels to passages and enrich results
         let mut results = Vec::new();
         for (label, dist) in labels.iter().zip(distances.iter()) {
             let string_id = self.map_label(*label);
-            match self.passages.get_passage(&string_id) {
+            match self.passages.get_passage_by_index(*label) {
                 Ok(passage) => {
                     results.push(SearchResult::with_metadata(
                         string_id,
@@ -190,7 +190,7 @@ impl LeannSearcher {
                     ));
                 }
                 Err(e) => {
-                    warn!("Passage not found for ID '{}': {}", string_id, e);
+                    warn!("Passage not found for label {}: {}", label, e);
                 }
             }
         }
@@ -252,14 +252,16 @@ impl LeannSearcher {
         let mut scorer = BM25Scorer::default();
 
         let mut documents = Vec::new();
+        let mut passage_map: HashMap<String, Passage> = HashMap::new();
         for file_path in self.passages.passage_files() {
             let file = std::fs::File::open(file_path)?;
             let reader = std::io::BufReader::new(file);
             use std::io::BufRead;
             for line in reader.lines() {
                 let line = line?;
-                if let Ok(passage) = serde_json::from_str::<crate::passages::Passage>(&line) {
-                    documents.push((passage.id, passage.text));
+                if let Ok(passage) = serde_json::from_str::<Passage>(&line) {
+                    documents.push((passage.id.clone(), passage.text.clone()));
+                    passage_map.insert(passage.id.clone(), passage);
                 }
             }
         }
@@ -269,9 +271,9 @@ impl LeannSearcher {
 
         // Enrich results with passage text and metadata
         for result in &mut results {
-            if let Ok(passage) = self.passages.get_passage(&result.id) {
-                result.text = passage.text;
-                result.metadata = passage.metadata;
+            if let Some(passage) = passage_map.get(&result.id) {
+                result.text.clone_from(&passage.text);
+                result.metadata.clone_from(&passage.metadata);
             }
         }
 

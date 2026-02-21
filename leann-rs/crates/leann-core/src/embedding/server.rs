@@ -15,7 +15,6 @@ pub struct EmbeddingServer {
     provider: Arc<dyn EmbeddingProvider>,
     passages: Arc<PassageManager>,
     distance_metric: DistanceMetric,
-    id_map: Vec<String>,
     dimensions: usize,
 }
 
@@ -25,7 +24,6 @@ impl EmbeddingServer {
         provider: Arc<dyn EmbeddingProvider>,
         passages: Arc<PassageManager>,
         distance_metric: DistanceMetric,
-        id_map: Vec<String>,
         dimensions: usize,
     ) -> Self {
         Self {
@@ -33,7 +31,6 @@ impl EmbeddingServer {
             provider,
             passages,
             distance_metric,
-            id_map,
             dimensions,
         }
     }
@@ -146,8 +143,7 @@ impl EmbeddingServer {
         let mut found_indices = Vec::new();
 
         for (idx, &nid) in node_ids.iter().enumerate() {
-            let passage_id = self.map_node_id(nid);
-            if let Ok(passage) = self.passages.get_passage(&passage_id)
+            if let Ok(passage) = self.passages.get_passage_by_index(nid)
                 && !passage.text.is_empty()
             {
                 texts.push(passage.text);
@@ -187,8 +183,7 @@ impl EmbeddingServer {
         let mut found_indices = Vec::new();
 
         for (idx, &nid) in node_ids.iter().enumerate() {
-            let passage_id = self.map_node_id(nid);
-            if let Ok(passage) = self.passages.get_passage(&passage_id)
+            if let Ok(passage) = self.passages.get_passage_by_index(nid)
                 && !passage.text.is_empty()
             {
                 texts.push(passage.text);
@@ -214,13 +209,5 @@ impl EmbeddingServer {
 
         let response: Vec<Vec<f32>> = vec![vec![n as f32, d as f32], flat_data];
         Ok(rmp_serde::to_vec(&response)?)
-    }
-
-    fn map_node_id(&self, nid: usize) -> String {
-        if !self.id_map.is_empty() && nid < self.id_map.len() {
-            self.id_map[nid].clone()
-        } else {
-            nid.to_string()
-        }
     }
 }

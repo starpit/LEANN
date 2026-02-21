@@ -200,7 +200,7 @@ A LEANN index consists of:
 |------|----------|
 | `<name>.meta.json` | Index metadata (model, dimensions, backend config) |
 | `<name>.passages.jsonl` | Raw text chunks with metadata |
-| `<name>.passages.idx` | Byte-offset map for random passage access |
+| `<name>.passages.idx` | Byte offsets for random passage access (one offset per line) |
 | `<name>.index` | HNSW graph (standard or compact CSR) |
 | `<name>.ids.txt` | Node ID to passage ID mapping |
 
@@ -220,7 +220,7 @@ A LEANN index consists of:
 
 ## Benchmarks
 
-The pure-Rust HNSW engine matches or exceeds FAISS C++ performance: **3.4x geometric mean speedup** across 23 benchmarks (distance, build, search, recompute, full pipeline, index size). Distance computations are 10-204x faster via SIMD; search is on par; index files are 85% smaller.
+The pure-Rust HNSW engine matches or exceeds FAISS C++ performance: **3.3x geometric mean speedup** across 25 benchmarks (distance, build, search, recompute, full pipeline, passage lookup, index size). Distance computations are 9-111x faster via SIMD; search is on par; passage lookups are 2.5-2.8x faster; index files are 85% smaller.
 
 See **[RUST_PERFORMANCE.md](RUST_PERFORMANCE.md)** for full results, methodology, and reproduction instructions.
 

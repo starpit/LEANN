@@ -125,7 +125,7 @@ def main():
     print("=== LEANN Python (FAISS C++) HNSW Benchmarks ===", file=sys.stderr)
 
     # ── Distance computation ────────────────────────────────────────
-    print("\n[1/5] Distance computation...", file=sys.stderr)
+    print("\n[1/6] Distance computation...", file=sys.stderr)
     for dim in [128, 384, 768]:
         a = rng.rand(dim).astype(np.float32)
         b = rng.rand(dim).astype(np.float32)
@@ -139,7 +139,7 @@ def main():
         results[f"distance/ip/{dim}"] = make_result(times)
 
     # ── HNSW build ──────────────────────────────────────────────────
-    print("[2/5] HNSW build...", file=sys.stderr)
+    print("[2/6] HNSW build...", file=sys.stderr)
     build_sizes = [100, 1_000, 10_000]
     if not args.skip_large:
         build_sizes.append(50_000)
@@ -159,7 +159,7 @@ def main():
         results[f"hnsw_build/{n}"] = make_result(times)
 
     # ── HNSW search (stored vectors) ────────────────────────────────
-    print("[3/5] HNSW search (stored vectors)...", file=sys.stderr)
+    print("[3/6] HNSW search (stored vectors)...", file=sys.stderr)
     n = 10_000
     dim = 384
     top_k = 10
@@ -182,7 +182,7 @@ def main():
     # Note: FAISS doesn't have a native recompute mode, so we simulate
     # it by doing a normal search. This gives the baseline comparison.
     print(
-        "[4/5] HNSW search (recompute baseline - FAISS stored search)...",
+        "[4/6] HNSW search (recompute baseline - FAISS stored search)...",
         file=sys.stderr,
     )
     for ef in [16, 32, 64, 128, 256]:
@@ -193,7 +193,7 @@ def main():
         results[f"hnsw_search_recompute/ef{ef}"] = make_result(times)
 
     # ── Full pipeline (build + write + read + search) ───────────────
-    print("[5/5] Full pipeline...", file=sys.stderr)
+    print("[5/6] Full pipeline...", file=sys.stderr)
     import tempfile
     import os
 
@@ -229,6 +229,56 @@ def main():
         size = os.path.getsize(fname)
         os.unlink(fname)
         results[f"index_size_bytes/{n}"] = make_size_result(size)
+
+    # ── Passage lookup ────────────────────────────────────────────────
+    print("[6/6] Passage lookup...", file=sys.stderr)
+    import pickle
+
+    for n in [1_000, 10_000]:
+        print(f"  Passage lookup n={n}...", file=sys.stderr)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            passages_path = os.path.join(tmpdir, "test.passages.jsonl")
+            offset_path = os.path.join(tmpdir, "test.passages.idx")
+
+            # Create passages with realistic-ish text
+            offset_map = {}
+            with open(passages_path, "w", encoding="utf-8") as f:
+                for i in range(n):
+                    offset = f.tell()
+                    passage = {
+                        "id": str(i),
+                        "text": (
+                            f"This is document number {i} about topic {i % 10}. "
+                            "It contains some text that is representative of a "
+                            "typical passage in a RAG system."
+                        ),
+                        "metadata": {"doc_num": i, "topic": f"topic_{i % 10}"},
+                    }
+                    json.dump(passage, f, ensure_ascii=False)
+                    f.write("\n")
+                    offset_map[str(i)] = offset
+
+            with open(offset_path, "wb") as f:
+                pickle.dump(offset_map, f)
+
+            # Load offset map (as Python does)
+            with open(offset_path, "rb") as f:
+                loaded_offsets = pickle.load(f)
+
+            # Generate random lookup indices
+            lookup_rng = np.random.RandomState(42)
+            lookup_ids = [str(x) for x in lookup_rng.randint(0, n, size=1000)]
+
+            def do_lookups():
+                with open(passages_path, encoding="utf-8") as pf:
+                    for pid in lookup_ids:
+                        offset = loaded_offsets[pid]
+                        pf.seek(offset)
+                        json.loads(pf.readline())
+
+            times = bench_fn(do_lookups, warmup=5, repeats=100)
+            results[f"passage_lookup/{n}"] = make_result(times, scale=1.0 / len(lookup_ids))
 
     print("\nDone!", file=sys.stderr)
 
