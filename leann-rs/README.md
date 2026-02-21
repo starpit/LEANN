@@ -133,11 +133,17 @@ Search request body:
 
 ## Python Bindings
 
-The `leann-python` crate provides native Python bindings via PyO3. Build with [maturin](https://www.maturin.rs/):
+The `leann-python` crate provides native Python bindings via PyO3, with `.pyi` type stubs for IDE autocomplete/typecheck. Build with [maturin](https://www.maturin.rs/):
 
 ```bash
 cd crates/leann-python
 maturin develop --release
+```
+
+Run binding tests:
+
+```bash
+cd crates/leann-python && cargo test --test test_maturin
 ```
 
 Usage:
@@ -242,6 +248,9 @@ cargo build --release
 
 # Build Python bindings
 cd crates/leann-python && maturin develop
+
+# Test Python bindings (maturin develop + pytest)
+cd crates/leann-python && cargo test --test test_maturin
 ```
 
 ## License

@@ -16,6 +16,9 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 
+[project.optional-dependencies]
+test = ["pytest"]
+
 [tool.maturin]
 features = ["pyo3/extension-module"]
 python-source = "python"

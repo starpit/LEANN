@@ -1,3 +1,4 @@
+use ndarray::Array2;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use std::collections::HashMap;
@@ -177,6 +178,34 @@ impl LeannBuilder {
             );
             self.inner
                 .build_index(&PathBuf::from(index_path), &provider)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))
+        })
+    }
+
+    /// Build the index from pre-computed embeddings (no embedding server needed).
+    fn build_index_from_embeddings(
+        &mut self,
+        py: Python<'_>,
+        index_path: &str,
+        ids: Vec<String>,
+        embeddings: Vec<Vec<f32>>,
+    ) -> PyResult<()> {
+        if embeddings.is_empty() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "embeddings list is empty",
+            ));
+        }
+        let ncols = embeddings[0].len();
+        let nrows = embeddings.len();
+        // Flatten into Array2
+        let flat: Vec<f32> = embeddings.into_iter().flatten().collect();
+        let arr = Array2::from_shape_vec((nrows, ncols), flat).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("Invalid embedding shape: {}", e))
+        })?;
+
+        py.allow_threads(|| {
+            self.inner
+                .build_index_from_embeddings(&PathBuf::from(index_path), &ids, &arr)
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))
         })
     }
