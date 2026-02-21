@@ -79,7 +79,7 @@ impl PassageManager {
                 index_file.display()
             );
 
-            // Load the offset map (bincode format for Rust, or migration from pickle)
+            // Load the offset map (bincode or JSON format)
             let offset_map = load_offset_map(&index_file)?;
             total_count += offset_map.len();
             offset_maps.insert(passage_file, offset_map);
@@ -268,12 +268,9 @@ fn pick_existing(candidates: &[PathBuf]) -> Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("No path candidates provided"))
 }
 
-/// Load offset map. Try bincode first (Rust-native), then fall back to a simple
-/// JSON format for migration from Python pickle.
+/// Load offset map from bincode or JSON format.
 fn load_offset_map(path: &Path) -> Result<HashMap<String, u64>> {
     let mut file = File::open(path)?;
-
-    // Try bincode first
     let mut buf = Vec::new();
     file.read_to_end(&mut buf)?;
 
@@ -281,255 +278,14 @@ fn load_offset_map(path: &Path) -> Result<HashMap<String, u64>> {
         return Ok(map);
     }
 
-    // Try JSON fallback (for migration)
     if let Ok(map) = serde_json::from_slice::<HashMap<String, u64>>(&buf) {
         return Ok(map);
     }
 
-    // Try Python pickle offset format: these are Python pickle protocol 2+ files.
-    // We implement a minimal parser for the common case: dict of str -> int.
-    parse_python_pickle_offset_map(&buf)
-        .with_context(|| format!("Failed to parse offset map at {}", path.display()))
-}
-
-/// Minimal parser for Python pickle offset maps (dict[str, int]).
-/// Supports the common pickle protocol used by Python's pickle.dump().
-fn parse_python_pickle_offset_map(data: &[u8]) -> Result<HashMap<String, u64>> {
-    // Python pickle protocol 2+ starts with \x80\x02 (or higher protocol number).
-    // We use a simple state machine approach to extract string keys and integer values.
-    let mut map = HashMap::new();
-    let mut pos = 0;
-
-    if data.len() < 2 {
-        anyhow::bail!("Data too short for pickle format");
-    }
-
-    // Check pickle protocol header
-    if data[0] == 0x80 {
-        // Protocol version byte
-        pos = 2; // Skip \x80 + version byte
-    }
-
-    // Opcodes we care about:
-    // } = EMPTY_DICT (0x7d)
-    // X = SHORT_BINUNICODE (0x8c) - protocol 4
-    // q = BINPUT (0x71)
-    // r = LONG_BINPUT (0x72)
-    // J = BININT (0x4a)
-    // K = BININT1 (0x4b)
-    // M = BININT2 (0x4d)
-    // s = SETITEM (0x73)
-    // u = SETITEMS (0x75)
-    // . = STOP (0x2e)
-    // 0 = POP (0x30)
-    // 8c = SHORT_BINUNICODE
-
-    let mut stack: Vec<PickleValue> = Vec::new();
-    let mut mark_positions: Vec<usize> = Vec::new();
-
-    while pos < data.len() {
-        let opcode = data[pos];
-        pos += 1;
-
-        match opcode {
-            0x80 => {
-                // PROTO - skip version byte
-                pos += 1;
-            }
-            0x7d => {
-                // EMPTY_DICT
-                stack.push(PickleValue::Dict(HashMap::new()));
-            }
-            0x28 => {
-                // MARK
-                mark_positions.push(stack.len());
-            }
-            0x8c => {
-                // SHORT_BINUNICODE
-                if pos >= data.len() {
-                    break;
-                }
-                let len = data[pos] as usize;
-                pos += 1;
-                if pos + len > data.len() {
-                    break;
-                }
-                let s = String::from_utf8_lossy(&data[pos..pos + len]).to_string();
-                pos += len;
-                stack.push(PickleValue::Str(s));
-            }
-            0x8d => {
-                // BINUNICODE8
-                if pos + 8 > data.len() {
-                    break;
-                }
-                let len = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
-                pos += 8;
-                if pos + len > data.len() {
-                    break;
-                }
-                let s = String::from_utf8_lossy(&data[pos..pos + len]).to_string();
-                pos += len;
-                stack.push(PickleValue::Str(s));
-            }
-            0x58 => {
-                // BINUNICODE (4 byte length)
-                if pos + 4 > data.len() {
-                    break;
-                }
-                let len = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
-                pos += 4;
-                if pos + len > data.len() {
-                    break;
-                }
-                let s = String::from_utf8_lossy(&data[pos..pos + len]).to_string();
-                pos += len;
-                stack.push(PickleValue::Str(s));
-            }
-            0x4a => {
-                // BININT (4 byte signed int)
-                if pos + 4 > data.len() {
-                    break;
-                }
-                let v = i32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as i64;
-                pos += 4;
-                stack.push(PickleValue::Int(v));
-            }
-            0x4b => {
-                // BININT1 (1 byte unsigned int)
-                if pos >= data.len() {
-                    break;
-                }
-                let v = data[pos] as i64;
-                pos += 1;
-                stack.push(PickleValue::Int(v));
-            }
-            0x4d => {
-                // BININT2 (2 byte unsigned int)
-                if pos + 2 > data.len() {
-                    break;
-                }
-                let v = u16::from_le_bytes(data[pos..pos + 2].try_into().unwrap()) as i64;
-                pos += 2;
-                stack.push(PickleValue::Int(v));
-            }
-            0x8a => {
-                // LONG1 (1-byte length followed by little-endian twos-complement)
-                if pos >= data.len() {
-                    break;
-                }
-                let nbytes = data[pos] as usize;
-                pos += 1;
-                if pos + nbytes > data.len() {
-                    break;
-                }
-                let val = read_long_bytes(&data[pos..pos + nbytes]);
-                pos += nbytes;
-                stack.push(PickleValue::Int(val));
-            }
-            0x8b => {
-                // LONG4 (4-byte length)
-                if pos + 4 > data.len() {
-                    break;
-                }
-                let nbytes = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
-                pos += 4;
-                if pos + nbytes > data.len() {
-                    break;
-                }
-                let val = read_long_bytes(&data[pos..pos + nbytes]);
-                pos += nbytes;
-                stack.push(PickleValue::Int(val));
-            }
-            0x73 => {
-                // SETITEM: pop value, pop key, peek dict, insert
-                if stack.len() >= 3 {
-                    let value = stack.pop().unwrap();
-                    let key = stack.pop().unwrap();
-                    if let Some(PickleValue::Dict(d)) = stack.last_mut()
-                        && let (PickleValue::Str(k), PickleValue::Int(v)) = (key, value)
-                    {
-                        d.insert(k, v as u64);
-                    }
-                }
-            }
-            0x75 => {
-                // SETITEMS: pop pairs from mark to top, insert into dict below mark
-                if let Some(mark_pos) = mark_positions.pop() {
-                    let items: Vec<PickleValue> = stack.drain(mark_pos..).collect();
-                    if let Some(PickleValue::Dict(d)) = stack.last_mut() {
-                        for chunk in items.chunks(2) {
-                            if let [PickleValue::Str(k), PickleValue::Int(v)] = chunk {
-                                d.insert(k.clone(), *v as u64);
-                            }
-                        }
-                    }
-                }
-            }
-            0x71 => {
-                // BINPUT (memo) - skip 1 byte
-                pos += 1;
-            }
-            0x72 => {
-                // LONG_BINPUT (memo) - skip 4 bytes
-                pos += 4;
-            }
-            0x94 => {
-                // MEMOIZE (protocol 4) - no argument
-            }
-            0x95 => {
-                // FRAME (protocol 4) - skip 8 bytes
-                pos += 8;
-            }
-            0x30 => {
-                // POP
-                stack.pop();
-            }
-            0x2e => {
-                // STOP
-                break;
-            }
-            _ => {
-                // Unknown opcode - try to continue
-            }
-        }
-    }
-
-    // The final value on the stack should be our dict
-    if let Some(PickleValue::Dict(d)) = stack.pop() {
-        map = d;
-    }
-
-    if map.is_empty() {
-        anyhow::bail!("Failed to parse any entries from pickle offset map");
-    }
-
-    Ok(map)
-}
-
-fn read_long_bytes(bytes: &[u8]) -> i64 {
-    if bytes.is_empty() {
-        return 0;
-    }
-    let mut val: i64 = 0;
-    for (i, &b) in bytes.iter().enumerate() {
-        val |= (b as i64) << (8 * i);
-    }
-    // Sign extend if the high bit of the last byte is set
-    if bytes.last().is_some_and(|&b| b & 0x80 != 0) {
-        let bits = bytes.len() * 8;
-        if bits < 64 {
-            val |= !0i64 << bits;
-        }
-    }
-    val
-}
-
-#[derive(Debug, Clone)]
-enum PickleValue {
-    Str(String),
-    Int(i64),
-    Dict(HashMap<String, u64>),
+    anyhow::bail!(
+        "Failed to parse offset map at {} (expected bincode or JSON)",
+        path.display()
+    )
 }
 
 #[cfg(test)]
