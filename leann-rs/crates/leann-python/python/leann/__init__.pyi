@@ -6,6 +6,7 @@ from leann.leann import (
     LeannSearcher as LeannSearcher,
     ReActAgent as ReActAgent,
     SearchResult as SearchResult,
+    get_registered_backends as get_registered_backends,
 )
 
 __version__: str

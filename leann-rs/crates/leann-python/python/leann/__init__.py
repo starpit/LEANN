@@ -11,6 +11,7 @@ from leann.leann import (
     LeannSearcher,
     ReActAgent,
     SearchResult,
+    get_registered_backends,
 )
 
 __all__ = [
@@ -19,6 +20,7 @@ __all__ = [
     "LeannChat",
     "SearchResult",
     "ReActAgent",
+    "get_registered_backends",
 ]
 
 __version__ = "0.1.0"

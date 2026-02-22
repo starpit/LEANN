@@ -2,7 +2,7 @@
 
 Comparison of Python test coverage (`tests/`) with Rust test coverage (`crates/leann-core/`, `crates/leann-cli/`, `crates/leann-server/`).
 
-**Rust totals: 200 tests (110 unit + 75 leann-core integration + 12 leann-cli + 4 leann-server), 0 failures.**
+**Rust totals: 211 tests (110 unit + 85 leann-core integration + 12 leann-cli + 4 leann-server), 0 failures.**
 
 ## Core Feature Tests
 
@@ -130,11 +130,12 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 | `test_metadata_filtering.rs` | 16 | All 13 filter operators via BM25 search + filter e2e |
 | `test_hybrid_search.rs` | 8 | BM25 + grep search, metadata filters |
 | `test_document_loading.rs` | 17 | File loading, chunking, AST chunking |
+| `test_python_compat.rs` | 11 | Cross-implementation format compatibility (meta.json, passages, HNSW binary, offsets) |
 | `test_sync.rs` | 9 | Merkle tree + FileSynchronizer |
 | `test_chat_pipeline.rs` | 5 | SimulatedChat LLM, LlmConfig |
 | `test_embedding_manager.rs` | 5 | EmbeddingServerManager lifecycle |
 | `test_index_format.rs` | 3 | Index meta schema validation |
-| **Subtotal** | **75** | |
+| **Subtotal** | **85** | |
 
 ### CLI Tests (leann-cli)
 
@@ -210,9 +211,10 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 | Embedding Manager | 5 | 5 | Partially covered (no server start) |
 | BM25 Scorer | — | 15 unit | Rust-only |
 | Index Format | — | 3 | Rust-only |
+| Python Format Compat | — | 11 | Rust-only (validates cross-impl format) |
 | Chat Pipeline | — | 5 | Rust-only |
 | HNSW Internals | — | 21 unit | Rust-only |
 | ReAct Agent | — | 11 unit | Rust-only |
 | HTTP Server | — | 4 | Rust-only |
 | Python-specific | 55+ | — | Not applicable |
-| **Total** | | **200** | |
+| **Total** | | **211** | |

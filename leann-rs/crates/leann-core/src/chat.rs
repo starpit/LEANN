@@ -300,7 +300,17 @@ impl LeannChat {
 
     /// Ask a question using RAG (retrieve context, then generate answer).
     pub fn ask(&self, question: &str, top_k: usize) -> Result<String> {
-        let results = self.searcher.search(question, top_k)?;
+        self.ask_with_params(question, top_k, &crate::searcher::SearchConfig::default())
+    }
+
+    /// Ask a question using RAG with full search configuration.
+    pub fn ask_with_params(
+        &self,
+        question: &str,
+        top_k: usize,
+        config: &crate::searcher::SearchConfig,
+    ) -> Result<String> {
+        let results = self.searcher.search_with_params(question, top_k, config)?;
 
         let context: String = results
             .iter()

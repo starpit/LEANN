@@ -4,6 +4,8 @@ use pyo3::types::{PyDict, PyList};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use leann_core::searcher::SearchConfig;
+
 /// Convert a serde_json::Value to a Python object.
 fn json_value_to_py(py: Python<'_>, value: &serde_json::Value) -> PyObject {
     match value {
@@ -80,6 +82,82 @@ fn extract_kwarg<'py, T: pyo3::FromPyObject<'py>>(
         }
     }
     None
+}
+
+/// Convert an anyhow::Error to the appropriate Python exception.
+fn anyhow_to_pyerr(e: anyhow::Error) -> PyErr {
+    let msg = format!("{}", e);
+    // Map common error patterns to appropriate Python exception types
+    if msg.contains("not found")
+        || msg.contains("No such file")
+        || msg.contains("does not exist")
+    {
+        pyo3::exceptions::PyFileNotFoundError::new_err(msg)
+    } else if msg.contains("Mismatch")
+        || msg.contains("Invalid")
+        || msg.contains("empty")
+        || msg.contains("not supported")
+    {
+        pyo3::exceptions::PyValueError::new_err(msg)
+    } else {
+        pyo3::exceptions::PyRuntimeError::new_err(msg)
+    }
+}
+
+/// Extract a SearchConfig from Python kwargs dict.
+fn extract_search_config(kw: Option<&Bound<'_, PyDict>>) -> SearchConfig {
+    let Some(kw) = kw else {
+        return SearchConfig::default();
+    };
+
+    let mut config = SearchConfig::default();
+
+    if let Some(v) = extract_kwarg::<usize>(kw, &["complexity"]) {
+        config.complexity = v;
+    }
+    if let Some(v) = extract_kwarg::<usize>(kw, &["beam_width"]) {
+        config.beam_width = v;
+    }
+    if let Some(v) = extract_kwarg::<f64>(kw, &["prune_ratio"]) {
+        config.prune_ratio = v;
+    }
+    if let Some(v) = extract_kwarg::<usize>(kw, &["batch_size"]) {
+        config.batch_size = v;
+    }
+    if let Some(v) = extract_kwarg::<bool>(kw, &["use_grep"]) {
+        config.use_grep = v;
+    }
+    if let Some(v) = extract_kwarg::<f64>(kw, &["gemma"]) {
+        config.gemma = v;
+    }
+    if let Some(v) = extract_kwarg::<u16>(kw, &["expected_zmq_port", "zmq_port"]) {
+        config.zmq_port = Some(v);
+    }
+
+    // Extract metadata_filters: dict[str, dict[str, Any]]
+    if let Ok(Some(filters_obj)) = kw.get_item("metadata_filters") {
+        if let Ok(filters_dict) = filters_obj.downcast::<PyDict>() {
+            let mut filters = HashMap::new();
+            for (field_key, field_val) in filters_dict.iter() {
+                if let Ok(field_name) = field_key.extract::<String>() {
+                    if let Ok(spec_dict) = field_val.downcast::<PyDict>() {
+                        let mut spec = HashMap::new();
+                        for (op_key, op_val) in spec_dict.iter() {
+                            if let Ok(op_name) = op_key.extract::<String>() {
+                                spec.insert(op_name, py_to_json_value(&op_val));
+                            }
+                        }
+                        filters.insert(field_name, spec);
+                    }
+                }
+            }
+            if !filters.is_empty() {
+                config.metadata_filters = Some(filters);
+            }
+        }
+    }
+
+    config
 }
 
 /// Search result returned from LEANN queries.
@@ -202,7 +280,7 @@ impl LeannBuilder {
                 leann_core::embedding::ollama::OllamaEmbedding::new("nomic-embed-text", None);
             self.inner
                 .build_index(&PathBuf::from(index_path), &provider)
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))
+                .map_err(anyhow_to_pyerr)
         })
     }
 
@@ -229,7 +307,7 @@ impl LeannBuilder {
         py.allow_threads(|| {
             self.inner
                 .build_index_from_embeddings(&PathBuf::from(index_path), &ids, &arr)
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))
+                .map_err(anyhow_to_pyerr)
         })
     }
 }
@@ -255,8 +333,8 @@ impl LeannSearcher {
         recompute_embeddings: bool,
         kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Self> {
-        let searcher = leann_core::LeannSearcher::open(&PathBuf::from(index_path))
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
+        let searcher =
+            leann_core::LeannSearcher::open(&PathBuf::from(index_path)).map_err(anyhow_to_pyerr)?;
 
         Ok(Self {
             inner: searcher,
@@ -264,9 +342,11 @@ impl LeannSearcher {
         })
     }
 
-    /// Search the index.
+    /// Search the index with optional configuration kwargs.
+    ///
+    /// Supported kwargs: complexity, beam_width, prune_ratio, metadata_filters,
+    /// batch_size, use_grep, gemma, expected_zmq_port.
     #[pyo3(signature = (query, top_k=5, **kwargs))]
-    #[allow(unused_variables)]
     fn search(
         &self,
         py: Python<'_>,
@@ -274,12 +354,13 @@ impl LeannSearcher {
         top_k: usize,
         kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Vec<SearchResult>> {
+        let config = extract_search_config(kwargs);
         let query_owned = query.to_string();
         py.allow_threads(|| {
             let results = self
                 .inner
-                .search(&query_owned, top_k)
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
+                .search_with_params(&query_owned, top_k, &config)
+                .map_err(anyhow_to_pyerr)?;
 
             Ok(results.into_iter().map(SearchResult::from).collect())
         })
@@ -310,8 +391,8 @@ impl LeannChat {
         enable_warmup: bool,
         kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Self> {
-        let searcher = leann_core::LeannSearcher::open(&PathBuf::from(index_path))
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
+        let searcher =
+            leann_core::LeannSearcher::open(&PathBuf::from(index_path)).map_err(anyhow_to_pyerr)?;
 
         let config = if let Some(cfg) = llm_config {
             let llm_type = cfg
@@ -343,14 +424,16 @@ impl LeannChat {
         };
 
         let chat = leann_core::chat::LeannChat::new(searcher, config.as_ref())
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
+            .map_err(anyhow_to_pyerr)?;
 
         Ok(Self { inner: chat })
     }
 
-    /// Ask a question using RAG.
+    /// Ask a question using RAG with optional search configuration kwargs.
+    ///
+    /// Supported kwargs: complexity, beam_width, prune_ratio, metadata_filters,
+    /// batch_size, use_grep, gemma, expected_zmq_port.
     #[pyo3(signature = (question, top_k=5, **kwargs))]
-    #[allow(unused_variables)]
     fn ask(
         &self,
         py: Python<'_>,
@@ -358,11 +441,12 @@ impl LeannChat {
         top_k: usize,
         kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<String> {
+        let config = extract_search_config(kwargs);
         let question_owned = question.to_string();
         py.allow_threads(|| {
             self.inner
-                .ask(&question_owned, top_k)
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))
+                .ask_with_params(&question_owned, top_k, &config)
+                .map_err(anyhow_to_pyerr)
         })
     }
 
@@ -415,7 +499,7 @@ impl ReActAgent {
     #[pyo3(signature = (question, top_k=5))]
     fn run(&self, py: Python<'_>, question: &str, top_k: usize) -> PyResult<String> {
         let searcher = leann_core::LeannSearcher::open(&PathBuf::from(&self.searcher_path))
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
+            .map_err(anyhow_to_pyerr)?;
 
         let config = leann_core::chat::LlmConfig::default();
 
@@ -424,15 +508,17 @@ impl ReActAgent {
             Some(&config),
             self.max_iterations,
         )
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
+        .map_err(anyhow_to_pyerr)?;
 
         let question_owned = question.to_string();
-        py.allow_threads(|| {
-            agent
-                .run(&question_owned, top_k)
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))
-        })
+        py.allow_threads(|| agent.run(&question_owned, top_k).map_err(anyhow_to_pyerr))
     }
+}
+
+/// Get list of registered backend names.
+#[pyfunction]
+fn get_registered_backends() -> Vec<String> {
+    vec!["hnsw".to_string()]
 }
 
 /// LEANN Python module.
@@ -443,5 +529,6 @@ fn leann(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<LeannSearcher>()?;
     m.add_class::<LeannChat>()?;
     m.add_class::<ReActAgent>()?;
+    m.add_function(wrap_pyfunction!(get_registered_backends, m)?)?;
     Ok(())
 }
