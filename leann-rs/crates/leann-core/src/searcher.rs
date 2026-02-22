@@ -13,7 +13,7 @@ use crate::embedding::client::EmbeddingClient;
 use crate::hnsw::graph::HnswGraph;
 use crate::hnsw::io::read_hnsw_index;
 #[cfg(feature = "embedding-zmq")]
-use crate::hnsw::search::{SearchParams, search_hnsw_recompute};
+use crate::hnsw::search::{PruningStrategy, SearchParams, search_hnsw_recompute};
 use crate::index::{DistanceMetric, IndexMeta, IndexPaths};
 #[cfg(feature = "bm25")]
 use crate::passages::Passage;
@@ -200,6 +200,16 @@ impl LeannSearcher {
             query_vec
         };
 
+        let pruning_strategy = config
+            .pruning_strategy
+            .as_deref()
+            .map(|s| match s {
+                "local" => PruningStrategy::Local,
+                "proportional" => PruningStrategy::Proportional,
+                _ => PruningStrategy::Global,
+            })
+            .unwrap_or(PruningStrategy::Global);
+
         let params = SearchParams {
             ef_search: config.complexity,
             beam_size: config.beam_width,
@@ -207,6 +217,7 @@ impl LeannSearcher {
             recompute_embeddings: self.recompute_embeddings,
             zmq_port: Some(zmq_port),
             batch_size: config.batch_size,
+            pruning_strategy,
             ..Default::default()
         };
 
@@ -402,6 +413,8 @@ pub struct SearchConfig {
     /// Weight of vector search (0.0 = pure BM25, 1.0 = pure vector).
     pub gemma: f64,
     pub zmq_port: Option<u16>,
+    /// Pruning strategy: "global", "local", or "proportional".
+    pub pruning_strategy: Option<String>,
 }
 
 impl Default for SearchConfig {
@@ -415,6 +428,7 @@ impl Default for SearchConfig {
             use_grep: false,
             gemma: 1.0,
             zmq_port: None,
+            pruning_strategy: None,
         }
     }
 }

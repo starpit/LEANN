@@ -133,6 +133,9 @@ fn extract_search_config(kw: Option<&Bound<'_, PyDict>>) -> SearchConfig {
     if let Some(v) = extract_kwarg::<u16>(kw, &["expected_zmq_port", "zmq_port"]) {
         config.zmq_port = Some(v);
     }
+    if let Some(v) = extract_kwarg::<String>(kw, &["pruning_strategy"]) {
+        config.pruning_strategy = Some(v);
+    }
 
     // Extract metadata_filters: dict[str, dict[str, Any]]
     if let Ok(Some(filters_obj)) = kw.get_item("metadata_filters") {
@@ -261,6 +264,11 @@ impl LeannBuilder {
             if let Some(val) = extract_kwarg::<bool>(kw, &["is_recompute", "recompute"]) {
                 builder = builder.with_recompute(val);
             }
+            if let Some(val) = extract_kwarg::<String>(kw, &["distance_metric"]) {
+                builder = builder.with_distance_metric(
+                    leann_core::index::DistanceMetric::from_str_lossy(&val),
+                );
+            }
         }
 
         Ok(Self { inner: builder })
@@ -374,6 +382,19 @@ impl LeannSearcher {
     fn cleanup(&mut self) {
         self.inner.cleanup();
     }
+
+    fn __enter__(slf: Py<Self>) -> Py<Self> {
+        slf
+    }
+
+    fn __exit__(
+        &mut self,
+        _exc_type: Option<&Bound<'_, PyAny>>,
+        _exc_val: Option<&Bound<'_, PyAny>>,
+        _exc_tb: Option<&Bound<'_, PyAny>>,
+    ) {
+        self.inner.cleanup();
+    }
 }
 
 /// RAG chat interface combining search + LLM.
@@ -461,7 +482,20 @@ impl LeannChat {
     }
 
     fn cleanup(&mut self) {
-        // Chat cleanup — no-op for now
+        self.inner.cleanup();
+    }
+
+    fn __enter__(slf: Py<Self>) -> Py<Self> {
+        slf
+    }
+
+    fn __exit__(
+        &mut self,
+        _exc_type: Option<&Bound<'_, PyAny>>,
+        _exc_val: Option<&Bound<'_, PyAny>>,
+        _exc_tb: Option<&Bound<'_, PyAny>>,
+    ) {
+        self.inner.cleanup();
     }
 }
 

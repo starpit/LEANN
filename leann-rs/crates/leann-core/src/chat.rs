@@ -345,6 +345,6 @@ impl LeannChat {
     }
 
     pub fn cleanup(&mut self) {
-        // Cleanup will be handled by Drop
+        self.searcher.cleanup();
     }
 }

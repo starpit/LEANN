@@ -15,13 +15,13 @@ Tracks how closely the Rust PyO3 bindings (`crates/leann-python`) match the Pyth
 |----------|-----------|---------|---------------|-------|
 | Module-level functions | 1 | 0 | 0 | 1 |
 | `SearchResult` | 4 | 0 | 0 | 4 |
-| `LeannBuilder` | 7 | 0 | 4 | 11 |
-| `LeannSearcher` | 14 | 1 | 3 | 18 |
-| `LeannChat` | 4 | 0 | 4 | 8 |
+| `LeannBuilder` | 8 | 0 | 3 | 11 |
+| `LeannSearcher` | 15 | 1 | 2 | 18 |
+| `LeannChat` | 6 | 0 | 3 | 9 |
 | `ReActAgent` | 3 | 0 | 1 | 4 |
 | On-disk format | 4 | 0 | 1 | 5 |
 | Exception mapping | 3 | 0 | 0 | 3 |
-| **Total** | **40** | **1** | **13** | **54** |
+| **Total** | **44** | **1** | **10** | **55** |
 
 ---
 
@@ -59,7 +59,7 @@ Tracks how closely the Rust PyO3 bindings (`crates/leann-python`) match the Pyth
 | Backend kwarg: `efConstruction` | Forwarded to HNSW builder | Extracted and applied | Compliant | |
 | Backend kwarg: `is_compact` | Forwarded to HNSW builder | Extracted and applied | Compliant | |
 | Backend kwarg: `is_recompute` | Forwarded to HNSW builder | Extracted and applied | Compliant | |
-| Backend kwarg: `distance_metric` | Forwarded to HNSW builder | Not extracted from kwargs | **Non-compliant** | Rust uses `with_distance_metric()` but doesn't read it from PyO3 kwargs. |
+| Backend kwarg: `distance_metric` | Forwarded to HNSW builder | Extracted from kwargs and applied via `with_distance_metric()` | Compliant | |
 | Normalized-embedding auto-detection | Detects OpenAI/Voyage/Cohere models and sets `distance_metric="cosine"` | Not implemented | **Non-compliant** | No auto-detection; user must set distance metric explicitly. |
 
 ---
@@ -81,11 +81,11 @@ Tracks how closely the Rust PyO3 bindings (`crates/leann-python`) match the Pyth
 | `search()`: `use_grep` | Regex-based text search | Forwarded to `SearchConfig.use_grep` | Compliant | |
 | `search()`: `gemma` | Vector/BM25 blend weight | Forwarded to `SearchConfig.gemma` | Compliant | |
 | `search()`: `expected_zmq_port` | ZMQ server port | Forwarded (also accepts `zmq_port`) | Compliant | |
-| `search()`: `pruning_strategy` | `"global"` / `"local"` / `"proportional"` | Not wired through PyO3 | **Non-compliant** | `SearchConfig` has the field but kwargs extraction doesn't include it. |
+| `search()`: `pruning_strategy` | `"global"` / `"local"` / `"proportional"` | Extracted from kwargs and forwarded to `SearchParams` | Compliant | |
 | `search()`: `provider_options` | Override embedding template | Not wired through PyO3 | **Non-compliant** | |
 | `search()`: `recompute_embeddings` | Per-call override (deprecated in Python) | Not supported | **Non-compliant** | Python deprecated this; reasonable to omit. |
 | `cleanup()` | Stops embedding server | Calls inner cleanup | Compliant | |
-| Context manager (`with` statement) | `__enter__` / `__exit__` | Not implemented | **Non-compliant** | Could be added with `__enter__`/`__exit__` pymethods. |
+| Context manager (`with` statement) | `__enter__` / `__exit__` | `__enter__` returns self, `__exit__` calls `cleanup()` | Compliant | |
 | Return order | Sorted by score descending | Same (verified) | Compliant | |
 
 ---
@@ -101,8 +101,8 @@ Tracks how closely the Rust PyO3 bindings (`crates/leann-python`) match the Pyth
 | `ask()` signature | Full search params + `llm_kwargs` | `(question, top_k=5, **kwargs)` | Compliant | Search kwargs forwarded to `ask_with_params`. |
 | `ask()`: `llm_kwargs` | Forwarded to LLM provider | Not wired | **Non-compliant** | LLM always uses default params. |
 | `start_interactive()` | REPL mode | Not implemented | **Non-compliant** | CLI handles interactive mode separately. |
-| `cleanup()` | Stops embedding server if owns searcher | No-op | **Non-compliant** | Should delegate to inner searcher cleanup. |
-| Context manager | `__enter__` / `__exit__` | Not implemented | **Non-compliant** | |
+| `cleanup()` | Stops embedding server if owns searcher | Delegates to inner searcher cleanup | Compliant | |
+| Context manager | `__enter__` / `__exit__` | `__enter__` returns self, `__exit__` calls `cleanup()` | Compliant | |
 
 ---
 
@@ -188,10 +188,10 @@ Error mapping uses `anyhow_to_pyerr()` which inspects the error message for patt
 
 ### Medium (functional gaps)
 
-2. **`distance_metric` kwargs extraction** — Add `distance_metric` to the PyO3 kwargs extraction in `LeannBuilder.__init__()`.
-3. **`pruning_strategy` kwargs extraction** — Add to `extract_search_config()`.
+2. ~~**`distance_metric` kwargs extraction**~~ — Resolved: extracted from PyO3 kwargs and applied via `with_distance_metric()`.
+3. ~~**`pruning_strategy` kwargs extraction**~~ — Resolved: extracted from kwargs and forwarded to `SearchParams`.
 4. ~~**`enable_warmup` / `recompute_embeddings` wiring**~~ — Resolved: wired via `SearcherOptions` / `open_with_options()`.
-5. **Context manager support** — Add `__enter__`/`__exit__` to `LeannSearcher` and `LeannChat`.
+5. ~~**Context manager support**~~ — Resolved: `__enter__`/`__exit__` added to `LeannSearcher` and `LeannChat`.
 
 ### Low (polish)
 
