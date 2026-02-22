@@ -66,6 +66,22 @@ fn py_to_json_value(obj: &Bound<'_, PyAny>) -> serde_json::Value {
     }
 }
 
+/// Extract a kwarg by trying multiple key names in order.
+/// Returns the first match found, or None if no key matched.
+fn extract_kwarg<'py, T: pyo3::FromPyObject<'py>>(
+    kw: &Bound<'py, PyDict>,
+    keys: &[&str],
+) -> Option<T> {
+    for key in keys {
+        if let Ok(Some(val)) = kw.get_item(*key) {
+            if let Ok(extracted) = val.extract::<T>() {
+                return Some(extracted);
+            }
+        }
+    }
+    None
+}
+
 /// Search result returned from LEANN queries.
 #[pyclass]
 #[derive(Clone)]
@@ -112,6 +128,14 @@ impl From<leann_core::SearchResult> for SearchResult {
 }
 
 /// Builder for creating LEANN indexes.
+///
+/// Signature matches the Python `LeannBuilder`:
+///   LeannBuilder(backend_name, embedding_model=..., dimensions=...,
+///                embedding_mode=..., embedding_options=..., **backend_kwargs)
+///
+/// `backend_kwargs` accepts both Python-style names (M, efConstruction,
+/// is_compact, is_recompute) and Rust-style names (m, ef_construction,
+/// compact, recompute). Python-style names take precedence when both are given.
 #[pyclass]
 struct LeannBuilder {
     inner: leann_core::LeannBuilder,
@@ -120,39 +144,44 @@ struct LeannBuilder {
 #[pymethods]
 impl LeannBuilder {
     #[new]
-    #[pyo3(signature = (embedding_model, dimensions=None, embedding_mode="sentence-transformers", **kwargs))]
+    #[pyo3(signature = (backend_name="hnsw", embedding_model="facebook/contriever", dimensions=None, embedding_mode="sentence-transformers", embedding_options=None, **kwargs))]
     fn new(
+        backend_name: &str,
         embedding_model: &str,
         dimensions: Option<usize>,
         embedding_mode: &str,
+        embedding_options: Option<&Bound<'_, PyDict>>,
         kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Self> {
-        let mut builder = leann_core::LeannBuilder::new(
-            embedding_model,
-            dimensions,
-            embedding_mode,
-        );
+        if backend_name != "hnsw" {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Backend '{}' is not supported in the Rust implementation. Only 'hnsw' is available.",
+                backend_name
+            )));
+        }
+
+        let mut builder =
+            leann_core::LeannBuilder::new(embedding_model, dimensions, embedding_mode);
+
+        if let Some(opts) = embedding_options {
+            builder = builder.with_embedding_options(py_dict_to_metadata(opts));
+        }
 
         if let Some(kw) = kwargs {
-            if let Ok(Some(m)) = kw.get_item("m") {
-                if let Ok(val) = m.extract::<usize>() {
-                    builder = builder.with_m(val);
-                }
+            // Accept Python-style (M, efConstruction, is_compact, is_recompute)
+            // and Rust-style (m, ef_construction, compact, recompute).
+            // Python-style checked first so it wins when both are present.
+            if let Some(val) = extract_kwarg::<usize>(kw, &["M", "m"]) {
+                builder = builder.with_m(val);
             }
-            if let Ok(Some(ef)) = kw.get_item("ef_construction") {
-                if let Ok(val) = ef.extract::<usize>() {
-                    builder = builder.with_ef_construction(val);
-                }
+            if let Some(val) = extract_kwarg::<usize>(kw, &["efConstruction", "ef_construction"]) {
+                builder = builder.with_ef_construction(val);
             }
-            if let Ok(Some(compact)) = kw.get_item("compact") {
-                if let Ok(val) = compact.extract::<bool>() {
-                    builder = builder.with_compact(val);
-                }
+            if let Some(val) = extract_kwarg::<bool>(kw, &["is_compact", "compact"]) {
+                builder = builder.with_compact(val);
             }
-            if let Ok(Some(recompute)) = kw.get_item("recompute") {
-                if let Ok(val) = recompute.extract::<bool>() {
-                    builder = builder.with_recompute(val);
-                }
+            if let Some(val) = extract_kwarg::<bool>(kw, &["is_recompute", "recompute"]) {
+                builder = builder.with_recompute(val);
             }
         }
 
@@ -162,20 +191,15 @@ impl LeannBuilder {
     /// Add a text chunk with optional metadata.
     #[pyo3(signature = (text, metadata=None))]
     fn add_text(&mut self, text: &str, metadata: Option<&Bound<'_, PyDict>>) {
-        let meta = metadata
-            .map(py_dict_to_metadata)
-            .unwrap_or_default();
+        let meta = metadata.map(py_dict_to_metadata).unwrap_or_default();
         self.inner.add_text(text, meta);
     }
 
-    /// Build the index at the given path.
+    /// Build the index at the given path (requires an Ollama embedding server).
     fn build_index(&mut self, py: Python<'_>, index_path: &str) -> PyResult<()> {
         py.allow_threads(|| {
-            // Use Ollama as default provider for the builder
-            let provider = leann_core::embedding::ollama::OllamaEmbedding::new(
-                "nomic-embed-text",
-                None,
-            );
+            let provider =
+                leann_core::embedding::ollama::OllamaEmbedding::new("nomic-embed-text", None);
             self.inner
                 .build_index(&PathBuf::from(index_path), &provider)
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))
@@ -197,7 +221,6 @@ impl LeannBuilder {
         }
         let ncols = embeddings[0].len();
         let nrows = embeddings.len();
-        // Flatten into Array2
         let flat: Vec<f32> = embeddings.into_iter().flatten().collect();
         let arr = Array2::from_shape_vec((nrows, ncols), flat).map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!("Invalid embedding shape: {}", e))
@@ -212,30 +235,44 @@ impl LeannBuilder {
 }
 
 /// Searcher for querying LEANN indexes.
+///
+/// Signature matches the Python `LeannSearcher`:
+///   LeannSearcher(index_path, enable_warmup=True, recompute_embeddings=True, **kwargs)
 #[pyclass]
 struct LeannSearcher {
     inner: leann_core::LeannSearcher,
+    index_path: String,
 }
 
 #[pymethods]
 impl LeannSearcher {
     #[new]
-    #[pyo3(signature = (index_path, **_kwargs))]
-    fn new(index_path: &str, _kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
+    #[pyo3(signature = (index_path, enable_warmup=true, recompute_embeddings=true, **kwargs))]
+    #[allow(unused_variables)]
+    fn new(
+        index_path: &str,
+        enable_warmup: bool,
+        recompute_embeddings: bool,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Self> {
         let searcher = leann_core::LeannSearcher::open(&PathBuf::from(index_path))
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
 
-        Ok(Self { inner: searcher })
+        Ok(Self {
+            inner: searcher,
+            index_path: index_path.to_string(),
+        })
     }
 
     /// Search the index.
-    #[pyo3(signature = (query, top_k=5, **_kwargs))]
+    #[pyo3(signature = (query, top_k=5, **kwargs))]
+    #[allow(unused_variables)]
     fn search(
         &self,
         py: Python<'_>,
         query: &str,
         top_k: usize,
-        _kwargs: Option<&Bound<'_, PyDict>>,
+        kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Vec<SearchResult>> {
         let query_owned = query.to_string();
         py.allow_threads(|| {
@@ -254,6 +291,9 @@ impl LeannSearcher {
 }
 
 /// RAG chat interface combining search + LLM.
+///
+/// Signature matches the Python `LeannChat`:
+///   LeannChat(index_path, llm_config=None, enable_warmup=False, **kwargs)
 #[pyclass]
 struct LeannChat {
     inner: leann_core::chat::LeannChat,
@@ -262,11 +302,13 @@ struct LeannChat {
 #[pymethods]
 impl LeannChat {
     #[new]
-    #[pyo3(signature = (index_path, llm_config=None, **_kwargs))]
+    #[pyo3(signature = (index_path, llm_config=None, enable_warmup=false, **kwargs))]
+    #[allow(unused_variables)]
     fn new(
         index_path: &str,
         llm_config: Option<&Bound<'_, PyDict>>,
-        _kwargs: Option<&Bound<'_, PyDict>>,
+        enable_warmup: bool,
+        kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Self> {
         let searcher = leann_core::LeannSearcher::open(&PathBuf::from(index_path))
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
@@ -307,13 +349,14 @@ impl LeannChat {
     }
 
     /// Ask a question using RAG.
-    #[pyo3(signature = (question, top_k=5, **_kwargs))]
+    #[pyo3(signature = (question, top_k=5, **kwargs))]
+    #[allow(unused_variables)]
     fn ask(
         &self,
         py: Python<'_>,
         question: &str,
         top_k: usize,
-        _kwargs: Option<&Bound<'_, PyDict>>,
+        kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<String> {
         let question_owned = question.to_string();
         py.allow_threads(|| {
@@ -322,9 +365,19 @@ impl LeannChat {
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))
         })
     }
+
+    fn cleanup(&mut self) {
+        // Chat cleanup — no-op for now
+    }
 }
 
 /// Multi-turn reasoning agent.
+///
+/// Signature matches the Python `ReActAgent`:
+///   ReActAgent(searcher, llm=None, llm_config=None, max_iterations=5)
+///
+/// The first argument can be a `LeannSearcher` instance (matching Python)
+/// or a string index path (convenience).
 #[pyclass]
 struct ReActAgent {
     searcher_path: String,
@@ -334,10 +387,26 @@ struct ReActAgent {
 #[pymethods]
 impl ReActAgent {
     #[new]
-    #[pyo3(signature = (index_path, max_iterations=5))]
-    fn new(index_path: &str, max_iterations: usize) -> PyResult<Self> {
+    #[pyo3(signature = (searcher, llm=None, llm_config=None, max_iterations=5))]
+    #[allow(unused_variables)]
+    fn new(
+        searcher: &Bound<'_, PyAny>,
+        llm: Option<&Bound<'_, PyAny>>,
+        llm_config: Option<&Bound<'_, PyDict>>,
+        max_iterations: usize,
+    ) -> PyResult<Self> {
+        let path = if let Ok(s) = searcher.extract::<String>() {
+            s
+        } else if let Ok(s) = searcher.downcast::<LeannSearcher>() {
+            s.borrow().index_path.clone()
+        } else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "First argument must be a LeannSearcher or a string index path",
+            ));
+        };
+
         Ok(Self {
-            searcher_path: index_path.to_string(),
+            searcher_path: path,
             max_iterations,
         })
     }

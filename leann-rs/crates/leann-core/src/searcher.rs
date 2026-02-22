@@ -128,7 +128,7 @@ impl LeannSearcher {
         #[cfg(feature = "embedding-zmq")]
         {
             let results = self.vector_search(query, top_k, config)?;
-            return Ok(results);
+            Ok(results)
         }
         #[cfg(not(feature = "embedding-zmq"))]
         {
