@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::info;
 
-use crate::searcher::LeannSearcher;
+use crate::searcher::{LeannSearcher, SearcherOptions};
 use crate::settings;
 
 /// Trait for LLM chat backends.
@@ -296,6 +296,16 @@ impl LeannChat {
             llm,
             owns_searcher: true,
         })
+    }
+
+    /// Create a new chat from an index path with custom searcher options.
+    pub fn new_with_options(
+        index_path: &std::path::Path,
+        llm_config: Option<&LlmConfig>,
+        searcher_options: &SearcherOptions,
+    ) -> Result<Self> {
+        let searcher = LeannSearcher::open_with_options(index_path, searcher_options)?;
+        Self::new(searcher, llm_config)
     }
 
     /// Ask a question using RAG (retrieve context, then generate answer).

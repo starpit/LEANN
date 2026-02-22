@@ -333,8 +333,13 @@ impl LeannSearcher {
         recompute_embeddings: bool,
         kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Self> {
+        let options = leann_core::SearcherOptions {
+            recompute_embeddings: Some(recompute_embeddings),
+            enable_warmup,
+        };
         let searcher =
-            leann_core::LeannSearcher::open(&PathBuf::from(index_path)).map_err(anyhow_to_pyerr)?;
+            leann_core::LeannSearcher::open_with_options(&PathBuf::from(index_path), &options)
+                .map_err(anyhow_to_pyerr)?;
 
         Ok(Self {
             inner: searcher,
@@ -391,9 +396,6 @@ impl LeannChat {
         enable_warmup: bool,
         kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Self> {
-        let searcher =
-            leann_core::LeannSearcher::open(&PathBuf::from(index_path)).map_err(anyhow_to_pyerr)?;
-
         let config = if let Some(cfg) = llm_config {
             let llm_type = cfg
                 .get_item("type")
@@ -423,8 +425,16 @@ impl LeannChat {
             None
         };
 
-        let chat = leann_core::chat::LeannChat::new(searcher, config.as_ref())
-            .map_err(anyhow_to_pyerr)?;
+        let searcher_options = leann_core::SearcherOptions {
+            recompute_embeddings: None,
+            enable_warmup,
+        };
+        let chat = leann_core::chat::LeannChat::new_with_options(
+            &PathBuf::from(index_path),
+            config.as_ref(),
+            &searcher_options,
+        )
+        .map_err(anyhow_to_pyerr)?;
 
         Ok(Self { inner: chat })
     }

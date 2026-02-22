@@ -20,6 +20,15 @@ use crate::passages::Passage;
 use crate::passages::{PassageManager, load_id_map};
 use crate::search_result::SearchResult;
 
+/// Options for opening a LEANN searcher with non-default behavior.
+#[derive(Default)]
+pub struct SearcherOptions {
+    /// Override `recompute_embeddings` from meta.json. `None` = use meta default.
+    pub recompute_embeddings: Option<bool>,
+    /// If true, send a dummy embedding request at construction to verify the ZMQ server.
+    pub enable_warmup: bool,
+}
+
 /// High-level searcher for LEANN indexes.
 #[allow(dead_code)]
 pub struct LeannSearcher {
@@ -85,6 +94,33 @@ impl LeannSearcher {
             bm25: None,
             meta_path,
         })
+    }
+
+    /// Open an existing LEANN index with custom options.
+    ///
+    /// This allows overriding `recompute_embeddings` from meta.json and
+    /// optionally warming up the ZMQ embedding server at construction time.
+    pub fn open_with_options(index_path: &Path, options: &SearcherOptions) -> Result<Self> {
+        let mut searcher = Self::open(index_path)?;
+
+        // Override recompute_embeddings if explicitly specified
+        if let Some(recompute) = options.recompute_embeddings {
+            searcher.recompute_embeddings = recompute;
+        }
+
+        // Warmup: send a dummy embedding request to verify the ZMQ server responds
+        #[cfg(feature = "embedding-zmq")]
+        if options.enable_warmup {
+            let client = EmbeddingClient::new(5557);
+            match client.compute_text_embeddings(&["warmup".to_string()]) {
+                Ok(_) => {}
+                Err(e) => {
+                    warn!("Warmup embedding request failed (server may not be running): {e}");
+                }
+            }
+        }
+
+        Ok(searcher)
     }
 
     /// Search for nearest neighbors.

@@ -44,4 +44,4 @@ pub use chat::LeannChat;
 pub use index::IndexMeta;
 pub use passages::{Passage, PassageManager};
 pub use search_result::SearchResult;
-pub use searcher::LeannSearcher;
+pub use searcher::{LeannSearcher, SearcherOptions};

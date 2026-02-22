@@ -16,12 +16,12 @@ Tracks how closely the Rust PyO3 bindings (`crates/leann-python`) match the Pyth
 | Module-level functions | 1 | 0 | 0 | 1 |
 | `SearchResult` | 4 | 0 | 0 | 4 |
 | `LeannBuilder` | 7 | 0 | 4 | 11 |
-| `LeannSearcher` | 12 | 3 | 3 | 18 |
-| `LeannChat` | 3 | 1 | 4 | 8 |
+| `LeannSearcher` | 14 | 1 | 3 | 18 |
+| `LeannChat` | 4 | 0 | 4 | 8 |
 | `ReActAgent` | 3 | 0 | 1 | 4 |
 | On-disk format | 4 | 0 | 1 | 5 |
 | Exception mapping | 3 | 0 | 0 | 3 |
-| **Total** | **37** | **4** | **13** | **54** |
+| **Total** | **40** | **1** | **13** | **54** |
 
 ---
 
@@ -69,9 +69,9 @@ Tracks how closely the Rust PyO3 bindings (`crates/leann-python`) match the Pyth
 | Feature | Python | Rust | Status | Notes |
 |---------|--------|------|--------|-------|
 | Constructor: `index_path` | Required | Required | Compliant | |
-| Constructor: `enable_warmup=True` | Triggers background embedding server startup | Accepted but no-op | **Partial** | Signature matches but warmup logic not implemented. |
-| Constructor: `recompute_embeddings=True` | Controls recompute path at search time | Accepted but no-op | **Partial** | Signature matches but not wired to search behavior. |
-| Constructor: `**backend_kwargs` | Forwarded to backend factory | Accepted but unused | **Partial** | Signature matches; kwargs not forwarded. |
+| Constructor: `enable_warmup=True` | Triggers background embedding server startup | Sends dummy ZMQ request to verify server | Compliant | Warmup sends a test embedding request; warns on failure. Requires `embedding-zmq` feature. |
+| Constructor: `recompute_embeddings=True` | Controls recompute path at search time | Overrides `meta.json` value via `open_with_options` | Compliant | Passed through `SearcherOptions` to override the meta default. |
+| Constructor: `**backend_kwargs` | Forwarded to backend factory | Accepted; useful kwargs handled via dedicated params | **Partial** | No backend factory abstraction in Rust. Warmup/recompute handled via `SearcherOptions`; search config via `SearchConfig`. |
 | `search()` signature | `(query, top_k=5, complexity=64, ...)` — named params | `(query, top_k=5, **kwargs)` — kwargs-based | Compliant | Both accept the same parameter names. |
 | `search()`: `complexity` | Controls candidate list size | Forwarded to `SearchConfig.complexity` | Compliant | |
 | `search()`: `beam_width` | Parallel search paths | Forwarded to `SearchConfig.beam_width` | Compliant | |
@@ -96,7 +96,7 @@ Tracks how closely the Rust PyO3 bindings (`crates/leann-python`) match the Pyth
 |---------|--------|------|--------|-------|
 | Constructor: `index_path` | Required | Required | Compliant | |
 | Constructor: `llm_config` | Dict with `type`, `model`, `api_key` | Dict with `type`, `model`, `api_key` | Compliant | |
-| Constructor: `enable_warmup` | Controls warmup (default `False`) | Accepted but no-op (default `false`) | **Partial** | Signature matches. |
+| Constructor: `enable_warmup` | Controls warmup (default `False`) | Forwarded to `SearcherOptions` via `new_with_options` | Compliant | Warmup delegated to the inner `LeannSearcher`. |
 | Constructor: `searcher` | Accept existing `LeannSearcher` to share | Not supported | **Non-compliant** | Rust always creates its own searcher from `index_path`. |
 | `ask()` signature | Full search params + `llm_kwargs` | `(question, top_k=5, **kwargs)` | Compliant | Search kwargs forwarded to `ask_with_params`. |
 | `ask()`: `llm_kwargs` | Forwarded to LLM provider | Not wired | **Non-compliant** | LLM always uses default params. |
@@ -190,7 +190,7 @@ Error mapping uses `anyhow_to_pyerr()` which inspects the error message for patt
 
 2. **`distance_metric` kwargs extraction** — Add `distance_metric` to the PyO3 kwargs extraction in `LeannBuilder.__init__()`.
 3. **`pruning_strategy` kwargs extraction** — Add to `extract_search_config()`.
-4. **`enable_warmup` / `recompute_embeddings` wiring** — Currently accepted but no-op on the `LeannSearcher` constructor.
+4. ~~**`enable_warmup` / `recompute_embeddings` wiring**~~ — Resolved: wired via `SearcherOptions` / `open_with_options()`.
 5. **Context manager support** — Add `__enter__`/`__exit__` to `LeannSearcher` and `LeannChat`.
 
 ### Low (polish)
