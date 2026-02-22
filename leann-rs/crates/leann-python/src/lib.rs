@@ -435,12 +435,23 @@ impl LeannChat {
                 .flatten()
                 .and_then(|v| v.extract::<String>().ok());
 
+            let base_url = cfg
+                .get_item("base_url")
+                .ok()
+                .flatten()
+                .and_then(|v| v.extract::<String>().ok());
+            let host = cfg
+                .get_item("host")
+                .ok()
+                .flatten()
+                .and_then(|v| v.extract::<String>().ok());
+
             Some(leann_core::chat::LlmConfig {
                 llm_type,
                 model,
                 api_key,
-                base_url: None,
-                host: None,
+                base_url,
+                host,
             })
         } else {
             None
@@ -556,6 +567,25 @@ impl ReActAgent {
 
         let question_owned = question.to_string();
         py.allow_threads(|| agent.run(&question_owned, top_k).map_err(anyhow_to_pyerr))
+    }
+
+    /// Search the index directly (without the ReAct reasoning loop).
+    #[pyo3(signature = (query, top_k=5))]
+    fn search(
+        &self,
+        py: Python<'_>,
+        query: &str,
+        top_k: usize,
+    ) -> PyResult<Vec<SearchResult>> {
+        let searcher = leann_core::LeannSearcher::open(&PathBuf::from(&self.searcher_path))
+            .map_err(anyhow_to_pyerr)?;
+        let query_owned = query.to_string();
+        py.allow_threads(|| {
+            let results = searcher
+                .search(&query_owned, top_k)
+                .map_err(anyhow_to_pyerr)?;
+            Ok(results.into_iter().map(SearchResult::from).collect())
+        })
     }
 }
 

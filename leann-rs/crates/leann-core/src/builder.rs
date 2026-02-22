@@ -13,6 +13,59 @@ use crate::hnsw::simd::normalize_l2_inplace;
 use crate::index::{DistanceMetric, IndexMeta, IndexPaths, PassageSource};
 use crate::passages::{Passage, write_id_map, write_passages};
 
+/// Detect whether a model produces normalized embeddings (L2 norm = 1),
+/// in which case cosine distance should be used instead of MIPS.
+///
+/// Matches the Python `LeannBuilder` auto-detection logic in `api.py`.
+pub fn is_normalized_embeddings_model(embedding_model: &str, embedding_mode: &str) -> bool {
+    let model = embedding_model.to_lowercase();
+    let mode = embedding_mode.to_lowercase();
+
+    // Exact (mode, model) matches
+    const KNOWN_MODELS: &[(&str, &str)] = &[
+        ("openai", "text-embedding-ada-002"),
+        ("openai", "text-embedding-3-small"),
+        ("openai", "text-embedding-3-large"),
+        ("voyage", "voyage-2"),
+        ("voyage", "voyage-3"),
+        ("voyage", "voyage-large-2"),
+        ("voyage", "voyage-multilingual-2"),
+        ("voyage", "voyage-code-2"),
+        ("cohere", "embed-english-v3.0"),
+        ("cohere", "embed-multilingual-v3.0"),
+        ("cohere", "embed-english-light-v3.0"),
+        ("cohere", "embed-multilingual-light-v3.0"),
+    ];
+
+    for &(known_mode, known_model) in KNOWN_MODELS {
+        if (mode == known_mode && model == known_model)
+            || (mode.contains(known_mode) && model.contains(known_model))
+        {
+            return true;
+        }
+    }
+
+    // Pattern-based detection
+    // OpenAI patterns
+    if (mode.contains("openai") || model.contains("openai"))
+        && ["text-embedding", "ada", "3-small", "3-large"]
+            .iter()
+            .any(|p| model.contains(p))
+    {
+        return true;
+    }
+    // Voyage patterns (all Voyage models produce normalized embeddings)
+    if mode.contains("voyage") || model.contains("voyage") {
+        return true;
+    }
+    // Cohere embed-* models
+    if (mode.contains("cohere") || model.contains("cohere")) && model.contains("embed") {
+        return true;
+    }
+
+    false
+}
+
 /// Builder for creating LEANN indexes.
 pub struct LeannBuilder {
     embedding_model: String,
@@ -22,20 +75,36 @@ pub struct LeannBuilder {
     num_threads: usize,
     chunks: Vec<Passage>,
     embedding_options: HashMap<String, serde_json::Value>,
+    /// Whether the distance metric was auto-detected (not explicitly set by the user).
+    distance_metric_auto: bool,
 }
 
 impl LeannBuilder {
     pub fn new(embedding_model: &str, dimensions: Option<usize>, embedding_mode: &str) -> Self {
+        let mut config = HnswConfig::default();
+        let mut distance_metric_auto = false;
+
+        if is_normalized_embeddings_model(embedding_model, embedding_mode) {
+            info!(
+                "Detected normalized embeddings model '{}' (mode '{}'). \
+                 Auto-setting distance_metric=cosine for optimal performance.",
+                embedding_model, embedding_mode
+            );
+            config.distance_metric = DistanceMetric::Cosine;
+            distance_metric_auto = true;
+        }
+
         Self {
             embedding_model: embedding_model.to_string(),
             dimensions,
             embedding_mode: embedding_mode.to_string(),
-            config: HnswConfig::default(),
+            config,
             num_threads: std::thread::available_parallelism()
                 .map(|n| n.get())
                 .unwrap_or(1),
             chunks: Vec::new(),
             embedding_options: HashMap::new(),
+            distance_metric_auto,
         }
     }
 
@@ -57,9 +126,10 @@ impl LeannBuilder {
         self
     }
 
-    /// Set the distance metric.
+    /// Set the distance metric (overrides auto-detection).
     pub fn with_distance_metric(mut self, metric: DistanceMetric) -> Self {
         self.config.distance_metric = metric;
+        self.distance_metric_auto = false;
         self
     }
 

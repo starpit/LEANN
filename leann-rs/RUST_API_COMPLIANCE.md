@@ -15,13 +15,13 @@ Tracks how closely the Rust PyO3 bindings (`crates/leann-python`) match the Pyth
 |----------|-----------|---------|---------------|-------|
 | Module-level functions | 1 | 0 | 0 | 1 |
 | `SearchResult` | 4 | 0 | 0 | 4 |
-| `LeannBuilder` | 8 | 0 | 3 | 11 |
+| `LeannBuilder` | 9 | 0 | 2 | 11 |
 | `LeannSearcher` | 15 | 1 | 2 | 18 |
-| `LeannChat` | 6 | 0 | 3 | 9 |
-| `ReActAgent` | 3 | 0 | 1 | 4 |
+| `LeannChat` | 7 | 0 | 2 | 9 |
+| `ReActAgent` | 4 | 0 | 0 | 4 |
 | On-disk format | 4 | 0 | 1 | 5 |
 | Exception mapping | 3 | 0 | 0 | 3 |
-| **Total** | **44** | **1** | **10** | **55** |
+| **Total** | **47** | **1** | **7** | **55** |
 
 ---
 
@@ -60,7 +60,7 @@ Tracks how closely the Rust PyO3 bindings (`crates/leann-python`) match the Pyth
 | Backend kwarg: `is_compact` | Forwarded to HNSW builder | Extracted and applied | Compliant | |
 | Backend kwarg: `is_recompute` | Forwarded to HNSW builder | Extracted and applied | Compliant | |
 | Backend kwarg: `distance_metric` | Forwarded to HNSW builder | Extracted from kwargs and applied via `with_distance_metric()` | Compliant | |
-| Normalized-embedding auto-detection | Detects OpenAI/Voyage/Cohere models and sets `distance_metric="cosine"` | Not implemented | **Non-compliant** | No auto-detection; user must set distance metric explicitly. |
+| Normalized-embedding auto-detection | Detects OpenAI/Voyage/Cohere models and sets `distance_metric="cosine"` | `is_normalized_embeddings_model()` in `builder.rs` | Compliant | Same known-model list + pattern matching as Python. Auto-sets cosine in constructor; explicit `with_distance_metric()` overrides. |
 
 ---
 
@@ -114,7 +114,7 @@ Tracks how closely the Rust PyO3 bindings (`crates/leann-python`) match the Pyth
 | Constructor: `llm` / `llm_config` | Optional LLM and config | Accepted (unused — uses default OpenAI) | Compliant | Signature matches. |
 | Constructor: `max_iterations` | Default 5 | Default 5 | Compliant | |
 | `run(question, top_k=5)` | Multi-turn reasoning | Multi-turn reasoning | Compliant | |
-| `search(query, top_k=5)` | Exposed as public method | Not exposed in PyO3 bindings | **Non-compliant** | Only `run()` is available from Python. |
+| `search(query, top_k=5)` | Exposed as public method | Exposed in PyO3 bindings | Compliant | Opens searcher and delegates to `LeannSearcher.search()`. |
 
 ---
 
@@ -198,9 +198,9 @@ Error mapping uses `anyhow_to_pyerr()` which inspects the error message for patt
 6. **`LeannChat(searcher=...)` kwarg** — Accept an existing searcher to avoid re-opening.
 7. **`update_index()`** — Incremental append for `LeannBuilder`.
 8. **`start_interactive()`** — REPL mode for `LeannChat` (CLI handles this separately).
-9. **`ReActAgent.search()`** — Expose as a PyO3 method.
+9. ~~**`ReActAgent.search()`**~~ — Resolved: exposed as PyO3 method, delegates to `LeannSearcher.search()`.
 10. **`build_index_from_embeddings` pickle overload** — Accept a pickle file path in addition to direct data.
-11. **Normalized-embedding auto-detection** — Detect known models and set cosine distance automatically.
+11. ~~**Normalized-embedding auto-detection**~~ — Resolved: `is_normalized_embeddings_model()` in `builder.rs` checks known models + patterns, auto-sets cosine distance.
 
 ---
 
