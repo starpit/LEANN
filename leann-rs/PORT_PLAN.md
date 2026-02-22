@@ -2,11 +2,13 @@
 
 > **Rust port currently based on Python commit [`1da64a9`](https://github.com/nickmccarty/LEANN/commit/1da64a9) (`main` as of 2026-02-20).** When updating the Rust code to match future Python changes, diff from this commit forward.
 
-## Current Status (2026-02-20)
+## Current Status (2026-02-22)
 
-**11,300+ lines of Rust across 4 crates. 200 Rust tests passing (110 unit + 75 integration + 16 CLI/server) + 23 Python binding tests. 0 errors, 0 warnings.**
+**~11,900 lines of Rust across 4 crates. 200 Rust tests passing (110 unit + 74 integration + 16 CLI/server) + 23 Python binding tests. 0 errors, 0 warnings.**
 
-All 8 phases of the initial implementation are complete. Since then, major HNSW performance work has been done: SIMD-optimized distance functions (NEON/AVX2), batch-4 distance computation, parallel build with rayon thread pools, flat heaps for cache locality, early termination, and a `VisitedList` with generation-counter reset. The pure-Rust HNSW engine now matches or approaches FAISS C++ performance. Criterion benchmark suite and Rust-vs-Python comparison scripts validate this.
+All 8 phases of the initial implementation are complete. Since then, major HNSW performance work has been done: SIMD-optimized distance functions (NEON/AVX2), batch-4 distance computation, parallel build with rayon thread pools, flat heaps for cache locality, early termination, prefetching in hot paths, `SearchBuffers` for heap/visited-list reuse, and a `VisitedList` with generation-counter reset. The pure-Rust HNSW engine now matches or approaches FAISS C++ performance. Criterion benchmark suite and Rust-vs-Python comparison scripts validate this.
+
+Modular compilation via Cargo feature flags (`chat`, `embedding-remote`, `embedding-zmq`, `parallel`, `bm25`, `watch`, `pdf`) enables slim builds for embedded or constrained use cases.
 
 What remains is hardening: ONNX Runtime activation, Python example porting, and CI setup.
 
@@ -14,9 +16,9 @@ What remains is hardening: ONNX Runtime activation, Python example porting, and 
 
 | Crate | LOC | Status |
 |-------|-----|--------|
-| `leann-core` | 8,959 | Complete - all modules implemented with 64 unit tests; extensive HNSW optimization |
-| `leann-cli` | 1,406 | Complete - all 8 commands wired up, aligned with Python CLI |
-| `leann-server` | 420 | Complete - all endpoints functional with state management |
+| `leann-core` | 9,920 | Complete - all modules implemented with 110 unit tests; extensive HNSW optimization; modular feature flags |
+| `leann-cli` | 1,405 | Complete - all 8 commands wired up, aligned with Python CLI |
+| `leann-server` | 223 | Complete - all endpoints functional with state management |
 | `leann-python` | 378 | Complete - PyO3 0.25, maturin build tested, 23 Python tests, `.pyi` stubs |
 
 ### File Inventory
@@ -26,49 +28,49 @@ leann-rs/
   Cargo.toml                         # workspace root
   crates/
     leann-core/benches/
-      hnsw_benchmarks.rs       (236)  # Criterion benchmarks: distance, build, search, recompute, pipeline
-      bench_json_output.rs     (396)  # Standalone JSON output benchmark (quantiles, RNG seed, build+search)
+      hnsw_benchmarks.rs       (253)  # Criterion benchmarks: distance, build, search, recompute, pipeline
+      bench_json_output.rs     (484)  # Standalone JSON output benchmark (quantiles, RNG seed, build+search)
     leann-core/src/
-      lib.rs                    (24)  # Module declarations + re-exports
+      lib.rs                    (47)  # Module declarations + re-exports + feature-gated modules
       search_result.rs          (72)  # SearchResult struct [3 tests]
-      settings.rs              (150)  # Env var resolution [4 tests]
-      index.rs                 (252)  # IndexMeta, IndexPaths, DistanceMetric [5 tests]
-      metadata_filter.rs       (714)  # 13 operators, AND logic [22 tests]
-      passages.rs              (626)  # PassageManager, JSONL I/O, pickle parser [3 tests]
-      bm25.rs                  (392)  # BM25Scorer [15 tests]
+      settings.rs              (149)  # Env var resolution [4 tests]
+      index.rs                 (247)  # IndexMeta, IndexPaths, DistanceMetric [4 tests]
+      metadata_filter.rs       (714)  # 13 operators, AND logic [29 tests]
+      passages.rs              (634)  # PassageManager, JSONL I/O, Vec<u64> offset map [9 tests]
+      bm25.rs                  (392)  # BM25Scorer [14 tests]
       builder.rs               (380)  # LeannBuilder (build + from_embeddings)
-      searcher.rs              (354)  # LeannSearcher (vector/BM25/grep/hybrid search)
-      chat.rs                  (274)  # LlmProvider trait + Ollama/OpenAI/Anthropic/Simulated
+      searcher.rs              (390)  # LeannSearcher (vector/BM25/grep/hybrid search)
+      chat.rs                  (330)  # LlmProvider trait + Ollama/OpenAI/Anthropic/Gemini/Simulated
       react_agent.rs           (335)  # ReAct agent [11 tests]
       sync.rs                  (279)  # MerkleTree + FileSynchronizer [2 tests]
       hnsw/
-        mod.rs                   (9)
+        mod.rs                   (8)
         graph.rs               (190)  # HnswGraph, GraphStorage, VectorStorage [2 tests]
-        simd.rs              (1,018)  # NEON/AVX2 SIMD distance (L2, IP), batch-4, FlatMinHeap/FlatMaxHeap, VisitedList [11 tests]
-        build.rs             (1,053)  # Parallel HNSW build (rayon), early termination, monomorphized distance [3 tests]
-        search.rs              (770)  # Beam search + recompute, SIMD batch-4 distance, flat heaps [2 tests]
+        simd.rs              (1,125)  # NEON/AVX2 SIMD distance (L2, IP), batch-4, prefetch, FlatMinHeap/FlatMaxHeap, VisitedList [12 tests]
+        build.rs             (1,116)  # Parallel HNSW build (rayon), early termination, prefetch, monomorphized distance [3 tests]
+        search.rs              (833)  # Beam search + recompute, SearchBuffers, SIMD batch-4, prefetch, flat heaps [2 tests]
         csr.rs                 (150)  # CSR conversion + embedding pruning [1 test]
-        io.rs                  (408)  # Binary format read/write (compact + standard) [1 test]
+        io.rs                  (404)  # Binary format read/write (compact + standard) [1 test]
       embedding/
-        mod.rs                  (54)  # EmbeddingProvider trait, EmbeddingMode enum
+        mod.rs                  (60)  # EmbeddingProvider trait, EmbeddingMode enum
         client.rs              (161)  # ZMQ REQ client (text/distance/by-id)
-        server.rs              (225)  # ZMQ REP server (3 request types)
-        manager.rs             (215)  # Subprocess lifecycle, port allocation
-        openai.rs              (107)  # OpenAI embedding API
-        ollama.rs              (259)  # Ollama embedding API (pipelined async)
-        gemini.rs              (100)  # Gemini batch embedding API
+        server.rs              (213)  # ZMQ REP server (3 request types)
+        manager.rs             (212)  # Subprocess lifecycle, port allocation
+        openai.rs              (131)  # OpenAI embedding API
+        ollama.rs              (260)  # Ollama embedding API (pipelined async)
+        gemini.rs              (117)  # Gemini batch embedding API
         onnx.rs                (102)  # ONNX Runtime scaffold (not yet activated)
       chunking/
-        mod.rs                  (73)  # chunk_text with sentence overlap [2 tests]
-        sentence.rs            (120)  # Sentence splitter [4 tests]
+        mod.rs                  (84)  # chunk_text with sentence overlap [2 tests]
+        sentence.rs            (121)  # Sentence splitter [4 tests]
         ast.rs                 (495)  # Python/Rust/JS/TS code chunking [4 tests]
       document_loaders/
         mod.rs                  (67)  # extract_text dispatcher, is_binary_document
-        pdf.rs                  (80)  # PDF text extraction via pdf-extract [3 tests]
+        pdf.rs                 (102)  # PDF text extraction via pdf-extract [3 tests]
     leann-cli/src/
-      main.rs                (1,406)  # clap CLI: build/search/ask/react/list/remove/watch/serve
+      main.rs                (1,405)  # clap CLI: build/search/ask/react/list/remove/watch/serve
     leann-server/src/
-      main.rs                  (420)  # Axum server: health/indexes/search/info endpoints
+      main.rs                  (223)  # Axum server: health/indexes/search/info endpoints
     leann-python/
       Cargo.toml                      # Standalone (excluded from workspace, built via maturin)
       pyproject.toml                  # maturin config
@@ -109,7 +111,7 @@ LEANN is a ~15K LOC Python vector database/RAG system with a custom C++ FAISS fo
 
 ### Key Protocols
 - **ZMQ Embedding Recompute**: REQ/REP over msgpack. Three message types: text embedding (list of strings), distance calculation ([[ids], [query_vec]]), embedding-by-id ([[ids]])
-- **Index file format**: `<name>.meta.json` + `<name>.passages.jsonl` + `<name>.passages.idx` (pickle offset map) + `<name>.index` (FAISS/DiskANN binary)
+- **Index file format**: `<name>.meta.json` + `<name>.passages.jsonl` + `<name>.passages.idx` (Vec<u64> byte offsets; Python version uses pickle) + `<name>.index` (FAISS/DiskANN binary)
 - **Backend plugin system**: Auto-discovery via `leann-backend-*` package naming + `@register_backend` decorator
 
 ---
@@ -121,9 +123,22 @@ LEANN is a ~15K LOC Python vector database/RAG system with a custom C++ FAISS fo
 ### Key dependencies (Cargo.toml) — all resolved:
 ```toml
 [workspace.dependencies]
-serde, serde_json, bincode, tokio, anyhow, thiserror, tracing, tracing-subscriber,
+serde, serde_json, tokio, anyhow, thiserror, tracing, tracing-subscriber,
 ndarray, rand, zeromq, rmp-serde, reqwest (blocking+json), clap, rayon, memmap2,
 axum, tower, tower-http, tiktoken-rs, sha2, regex, uuid, indicatif, notify, libc
+```
+
+### Feature flags (`leann-core/Cargo.toml`):
+```toml
+default = ["chat", "embedding-remote", "embedding-zmq", "parallel", "bm25", "watch", "pdf"]
+pdf              # dep:pdf-extract
+chat             # dep:reqwest — LLM chat backends + ReAct agent
+embedding-remote # dep:reqwest, dep:tokio — OpenAI, Ollama, Gemini embedding providers
+embedding-zmq    # dep:zeromq, dep:rmp-serde, dep:tokio — ZMQ embedding server/client
+parallel         # dep:rayon — parallel HNSW build
+bm25             # (no extra deps) — BM25 keyword search
+watch            # dep:sha2 — Merkle-tree incremental sync
+full             # all of the above
 ```
 
 PyO3 0.25 used for leann-python (standalone crate, Python 3.14 compatible).
@@ -145,13 +160,16 @@ PyO3 0.25 used for leann-python (standalone crate, Python 3.14 compatible).
 - **L2 normalization**: `normalize_l2` for cosine distance support
 - **FlatMinHeap / FlatMaxHeap**: Cache-friendly flat-array heaps replacing `BinaryHeap` for better SIMD performance in search/build hot loops
 - **VisitedList**: Generation-counter visited set for O(1) reset between searches (avoids `HashSet` allocation)
-- 11 tests: L2, IP, batch-4, non-aligned, large vectors, normalization, visited list operations
+- **Prefetch intrinsics**: Cache-line prefetching for neighbor vectors in hot loops
+- 12 tests: L2, IP, batch-4, non-aligned, large vectors, normalization, visited list operations
 
 ### 2c. HNSW Build (`hnsw/build.rs`) [COMPLETE + OPTIMIZED]
 - FAISS-style `IndexHNSW::add`: exponential level assignment, greedy insert, bidirectional neighbor connections
 - **Parallel build**: `build_hnsw_with_pool` using rayon `ThreadPool` with configurable thread count
 - **Monomorphized distance**: Distance functions use generics (not function pointers) for full inlining
 - **Early termination**: Stops neighbor search when improvement is unlikely
+- **Prefetching**: Cache-line prefetch of neighbor vectors before distance computation
+- **Reduced allocations**: Eliminated excess heap allocations in build hot path
 - **RNG seed support**: Deterministic builds via configurable seed
 - Worst-neighbor eviction when neighbor count exceeds M
 - MIPS, L2, and Cosine distance metrics
@@ -161,7 +179,9 @@ PyO3 0.25 used for leann-python (standalone crate, Python 3.14 compatible).
 - Two-phase beam search: top-down greedy from max level, ef-search at level 0
 - **SIMD batch-4 distance**: Processes 4 neighbor candidates at once using batch distance functions
 - **Flat heaps**: Uses `FlatMinHeap`/`FlatMaxHeap` for cache-friendly candidate management
+- **SearchBuffers**: Reusable struct holding heaps + visited list across multiple searches (avoids per-query allocation)
 - **VisitedList**: Generation-counter visited tracking (O(1) reset instead of HashSet realloc)
+- **Prefetching**: Cache-line prefetch of neighbor data in search hot path
 - `search_hnsw` (stored vectors) and `search_hnsw_recompute` (callback-based distance computation)
 - `SearchParams`: ef_search, beam_size, prune_ratio, pruning_strategy, batch_size
 - `PruningStrategy` enum: Global, Local, Proportional
@@ -185,28 +205,28 @@ PyO3 0.25 used for leann-python (standalone crate, Python 3.14 compatible).
 ### 3a. PassageManager (`passages.rs`) [COMPLETE]
 - JSONL read/write with byte-offset random access
 - `write_passages`, `write_id_map`, `load_id_map`
-- Multi-shard offset map support
-- Python pickle parser (`parse_python_pickle_offset_map`) for protocols 2-4 backward compatibility
+- `Vec<u64>` offset map format (replaced HashMap-based bincode format for efficiency)
+- Cached file handles for repeated passage lookups
 - Path resolution with metadata-relative fallbacks
-- 3 tests
+- 9 tests
 
 ### 3b. Index Metadata (`index.rs`) [COMPLETE]
 - `IndexMeta` with full serde for `.meta.json`
 - `PassageSource`, `DistanceMetric` enum (Mips/L2/Cosine)
 - `IndexPaths` for sibling file resolution
-- 5 tests
+- 4 tests
 
 ### 3c. BM25 (`bm25.rs`) [COMPLETE]
 - `BM25Scorer` with configurable k1/b parameters
 - Regex-based tokenization (punctuation removal + lowercase)
 - fit/score/search methods
-- 4 tests
+- 14 tests
 
 ### 3d. Metadata Filter (`metadata_filter.rs`) [COMPLETE]
 - 13 operators: ==, !=, <, <=, >, >=, in, not_in, contains, starts_with, ends_with, is_true, is_false
 - AND logic for multiple filters
 - Helper functions: value_to_f64, value_to_string, value_is_truthy
-- 7 tests
+- 29 tests
 
 ---
 
@@ -255,7 +275,7 @@ PyO3 0.25 used for leann-python (standalone crate, Python 3.14 compatible).
 
 ### 5c. LeannChat (`chat.rs`) [COMPLETE]
 - `LlmProvider` trait with `ask()` method
-- `OllamaChat`, `OpenAiChat`, `AnthropicChat`, `SimulatedChat` implementations
+- `OllamaChat`, `OpenAiChat`, `AnthropicChat`, `GeminiChat`, `SimulatedChat` implementations
 - `get_llm` factory from `LlmConfig`
 - `LeannChat`: wraps searcher + LLM, formats context prompt
 - `GeminiChat`: Gemini REST API (`generateContent` endpoint) with temperature/maxOutputTokens/topP
@@ -355,7 +375,7 @@ Maps the Python test suite (`tests/test_*.py`) to equivalent Rust integration te
 ### Test File Layout
 
 ```
-crates/leann-core/tests/         # 75 integration tests
+crates/leann-core/tests/         # 74 integration tests
   common/mod.rs              # ✅ Shared helpers: FakeEmbeddingProvider, temp_dir, sample docs
   test_build_search.rs       # ✅ 11 tests — Core pipeline: build → search → verify
   test_metadata_filtering.rs # ✅ 16 tests — All 13 operators via BM25 search + filter e2e
@@ -364,7 +384,7 @@ crates/leann-core/tests/         # 75 integration tests
   test_hybrid_search.rs      # ✅ 8 tests — BM25 + grep search, metadata filter integration
   test_chat_pipeline.rs      # ✅ 5 tests — SimulatedChat LLM, LlmConfig
   test_embedding_manager.rs  # ✅ 5 tests — EmbeddingServerManager lifecycle
-  test_index_format.rs       # ✅ 3 tests — Index meta schema validation
+  test_index_format.rs       # ✅ 3 tests — Index meta schema, distance metric, recompute flag
 
 crates/leann-cli/tests/          # 12 tests
   test_cli_args.rs           # ✅ 7 tests — Help output, version, argument parsing
@@ -444,7 +464,7 @@ Uses 10 diverse documents (animals, programming, weather, databases, cooking) wi
 ### E2E-4: Metadata Filtering (`test_metadata_filtering.rs`)
 **Python source:** `test_metadata_filtering.py`
 
-Tests `MetadataFilterEngine` at the end-to-end level (applied to real SearchResults from a built index), complementing the existing 7 unit tests.
+Tests `MetadataFilterEngine` at the end-to-end level (applied to real SearchResults from a built index), complementing the 29 unit tests.
 
 | Test | What it verifies |
 |------|-----------------|
@@ -515,6 +535,16 @@ Uses real small test files created in a temp dir.
 ### E2E-8: Index File Format Validation (`test_index_format.rs`)
 **Python source:** `test_diskann_partition.py` (file format parts)
 
+Implemented (3 tests):
+
+| Test | What it verifies |
+|------|-----------------|
+| `test_meta_json_schema` | Verify all required fields present: backend_name, embedding_model, dimensions, passage_sources |
+| `test_meta_distance_metric` | Distance metric serialization roundtrip (L2, Cosine, MIPS) |
+| `test_meta_requires_recompute` | Recompute flag correctly stored in meta.json |
+
+Planned (not yet implemented):
+
 | Test | What it verifies |
 |------|-----------------|
 | `test_index_files_exist_after_build` | `.meta.json`, `.passages.jsonl`, `.passages.idx`, `.index` — all created |
@@ -522,8 +552,6 @@ Uses real small test files created in a temp dir.
 | `test_id_map_roundtrip` | Write id_map, read it back → identical |
 | `test_passages_offset_random_access` | Load offset map, access passage by ID → correct text returned |
 | `test_hnsw_index_binary_roundtrip` | Write compact HNSW index, read back → graph structure matches |
-| `test_read_python_pickle_offset_map` | Parse a Python pickle protocol 2 offset map → correct offsets (backward compat) |
-| `test_meta_json_schema` | Verify all required fields present: backend_name, embedding_model, dimensions, passage_sources |
 
 ---
 
@@ -574,7 +602,7 @@ Uses `axum::test` helpers or spawns server on a random port.
 | Category | Runs in CI | Needs network | Actual count |
 |----------|-----------|---------------|--------------|
 | Unit tests (leann-core src/) | Yes | No | 110 |
-| Integration tests (leann-core tests/) | Yes | No | 75 |
+| Integration tests (leann-core tests/) | Yes | No | 74 |
 | CLI subprocess tests (leann-cli) | Yes | No | 12 |
 | HTTP server tests (leann-server) | Yes | No | 4 |
 | OpenAI embedding | No (`#[ignore]`) | Yes | 0 (planned) |
@@ -588,7 +616,7 @@ Uses `axum::test` helpers or spawns server on a random port.
 
 ### High Priority
 1. **ONNX Runtime activation** — Wire up `ort` crate for local sentence-transformer inference (currently scaffold only)
-2. ~~**End-to-end tests**~~ — DONE: 75 integration tests + 16 CLI/server tests (200 total with 110 unit tests). Includes metadata filtering (16 e2e), embedding manager lifecycle (5), CLI list/remove (5), ReAct parsing (11 unit). Remaining gap: Python format compat tests
+2. ~~**End-to-end tests**~~ — DONE: 74 integration tests + 16 CLI/server tests (200 total with 110 unit tests). Includes metadata filtering (16 e2e), embedding manager lifecycle (5), CLI list/remove (5), ReAct parsing (11 unit). Remaining gap: Python format compat tests
 3. ~~**GeminiChat LLM provider**~~ — DONE: `GeminiChat` in `chat.rs` using Gemini REST API (`generateContent` endpoint), wired into `get_llm` factory with `"gemini"` type
 4. ~~**PDF document loading**~~ — DONE: `pdf-extract` crate via `document_loaders` module with `pdf` feature flag
 5. ~~**Maturin build test**~~ — DONE: `.pyi` type stubs (`leann.pyi`, `__init__.pyi`), Python test suite (`tests/test_bindings.py`), `build_index_from_embeddings` PyO3 method for network-free integration tests, `[project.optional-dependencies] test` in pyproject.toml
@@ -622,9 +650,9 @@ Uses `axum::test` helpers or spawns server on a random port.
 
 ## Verification
 
-1. **Unit tests**: 110 passing across leann-core (search_result, settings, index, metadata_filter ×22, passages, bm25 ×15, hnsw/{build, search, graph, csr, io, simd}, chunking/*, document_loaders/pdf, react_agent ×11, sync). 0 errors, 0 warnings.
+1. **Unit tests**: 110 passing across leann-core (search_result ×3, settings ×4, index ×4, metadata_filter ×29, passages ×9, bm25 ×14, hnsw/{build ×3, search ×2, graph ×2, csr ×1, io ×1, simd ×12}, chunking/{mod ×2, sentence ×4, ast ×4}, document_loaders/pdf ×3, react_agent ×11, sync ×2). 0 errors, 0 warnings.
 2. **CLI conformance**: Rust CLI options aligned with Python CLI (2026-02-19) — verified via `--help` output comparison
-3. **Integration tests**: 75 passing across 8 test files in leann-core. Coverage: core build/search pipeline (11 tests), metadata filtering with all 13 operators via BM25+filter e2e (16 tests), BM25/grep search via LeannSearcher (8 tests), document loading + AST chunking (17 tests), file sync/Merkle tree (9 tests), chat/LLM pipeline (5 tests), embedding server manager lifecycle (5 tests), index file format validation (3 tests). All use FakeEmbeddingProvider for deterministic, network-free execution.
+3. **Integration tests**: 74 passing across 8 test files in leann-core. Coverage: core build/search pipeline (11 tests), metadata filtering with all 13 operators via BM25+filter e2e (16 tests), BM25/grep search via LeannSearcher (8 tests), document loading + AST chunking (17 tests), file sync/Merkle tree (9 tests), chat/LLM pipeline (5 tests), embedding server manager lifecycle (5 tests), index file format validation (3 tests). All use FakeEmbeddingProvider for deterministic, network-free execution.
 4. **CLI/server tests**: 16 passing — CLI subprocess/help tests (7 in leann-cli), CLI list/remove lifecycle (5 in leann-cli), HTTP server endpoints (4 in leann-server).
 5. **Python binding tests**: `tests/test_bindings.py` — import/introspection tests, constructor tests, error handling, integration tests (build_index_from_embeddings roundtrip)
 6. **Benchmark**: Criterion benchmark suite implemented (`cargo bench --package leann-core`) with 5 groups: distance computation (SIMD at 128/384/768 dims), HNSW build (100/1K/10K/50K), HNSW search (ef 16-256), HNSW search recompute (ef 16-256), full pipeline (build+write+read+search). JSON output binary with quantile tracking and RNG seed support for scripted comparison. Python FAISS comparison suite at `benchmarks/` with orchestration script (`benchmarks/compare_rust_python.sh`). See Benchmark Results below for detailed numbers.
