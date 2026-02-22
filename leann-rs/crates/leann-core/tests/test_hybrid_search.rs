@@ -1,3 +1,4 @@
+#![cfg(feature = "bm25")]
 //! E2E-3: Hybrid Search (Vector + BM25)
 //!
 //! Tests BM25 keyword search, grep search, and the hybrid search path

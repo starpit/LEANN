@@ -2,29 +2,35 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::Path;
+
+#[cfg(feature = "embedding-zmq")]
 use tracing::warn;
 
+#[cfg(feature = "bm25")]
 use crate::bm25::BM25Scorer;
+#[cfg(feature = "embedding-zmq")]
 use crate::embedding::client::EmbeddingClient;
 use crate::hnsw::graph::HnswGraph;
 use crate::hnsw::io::read_hnsw_index;
+#[cfg(feature = "embedding-zmq")]
 use crate::hnsw::search::{SearchParams, search_hnsw_recompute};
 use crate::index::{DistanceMetric, IndexMeta, IndexPaths};
-use crate::passages::{Passage, PassageManager, load_id_map};
+#[cfg(feature = "bm25")]
+use crate::passages::Passage;
+use crate::passages::{PassageManager, load_id_map};
 use crate::search_result::SearchResult;
 
 /// High-level searcher for LEANN indexes.
+#[allow(dead_code)]
 pub struct LeannSearcher {
-    #[allow(dead_code)]
     meta: IndexMeta,
     passages: PassageManager,
     graph: HnswGraph,
     id_map: Vec<String>,
     distance_metric: DistanceMetric,
     recompute_embeddings: bool,
-    #[allow(dead_code)]
+    #[cfg(feature = "bm25")]
     bm25: Option<BM25Scorer>,
-    #[allow(dead_code)]
     meta_path: std::path::PathBuf,
 }
 
@@ -75,6 +81,7 @@ impl LeannSearcher {
             id_map,
             distance_metric,
             recompute_embeddings: recompute,
+            #[cfg(feature = "bm25")]
             bm25: None,
             meta_path,
         })
@@ -95,12 +102,17 @@ impl LeannSearcher {
         let top_k = top_k.min(self.passages.len());
 
         // Handle pure BM25 search
+        #[cfg(feature = "bm25")]
         if config.gemma == 0.0 {
             let results = self.bm25_search(query, top_k)?;
             if let Some(ref filters) = config.metadata_filters {
                 return Ok(self.passages.filter_search_results(&results, filters));
             }
             return Ok(results);
+        }
+        #[cfg(not(feature = "bm25"))]
+        if config.gemma == 0.0 {
+            anyhow::bail!("BM25 search requires the `bm25` feature");
         }
 
         // Handle grep search
@@ -113,6 +125,25 @@ impl LeannSearcher {
         }
 
         // Vector search requires an embedding client
+        #[cfg(feature = "embedding-zmq")]
+        {
+            let results = self.vector_search(query, top_k, config)?;
+            return Ok(results);
+        }
+        #[cfg(not(feature = "embedding-zmq"))]
+        {
+            let _ = (query, top_k, config);
+            anyhow::bail!("Vector search requires the `embedding-zmq` feature");
+        }
+    }
+
+    #[cfg(feature = "embedding-zmq")]
+    fn vector_search(
+        &self,
+        query: &str,
+        top_k: usize,
+        config: &SearchConfig,
+    ) -> Result<Vec<SearchResult>> {
         // For now, we need the embedding server to compute query embeddings
         let zmq_port = config.zmq_port.unwrap_or(5557);
         let client = EmbeddingClient::new(zmq_port);
@@ -202,6 +233,7 @@ impl LeannSearcher {
         }
 
         // Handle hybrid search
+        #[cfg(feature = "bm25")]
         if config.gemma < 1.0 {
             let bm25_results = self.bm25_search(query, top_k)?;
             let bm25_weight = 1.0 - config.gemma;
@@ -240,6 +272,7 @@ impl LeannSearcher {
         Ok(results)
     }
 
+    #[cfg(feature = "embedding-zmq")]
     fn map_label(&self, label: usize) -> String {
         if !self.id_map.is_empty() && label < self.id_map.len() {
             self.id_map[label].clone()
@@ -248,6 +281,7 @@ impl LeannSearcher {
         }
     }
 
+    #[cfg(feature = "bm25")]
     fn bm25_search(&self, query: &str, top_k: usize) -> Result<Vec<SearchResult>> {
         let mut scorer = BM25Scorer::default();
 

@@ -1,3 +1,4 @@
+#![cfg(feature = "chat")]
 //! E2E-2: Full RAG Pipeline — Build → Search → Chat
 //!
 //! Tests the LeannChat interface with SimulatedChat LLM.

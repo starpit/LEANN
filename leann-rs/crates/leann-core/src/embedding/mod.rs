@@ -1,9 +1,15 @@
-pub mod client;
-pub mod gemini;
 pub mod manager;
-pub mod ollama;
 pub mod onnx;
+
+#[cfg(feature = "embedding-zmq")]
+pub mod client;
+#[cfg(feature = "embedding-remote")]
+pub mod gemini;
+#[cfg(feature = "embedding-remote")]
+pub mod ollama;
+#[cfg(feature = "embedding-remote")]
 pub mod openai;
+#[cfg(feature = "embedding-zmq")]
 pub mod server;
 
 use anyhow::Result;

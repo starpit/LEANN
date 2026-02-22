@@ -126,6 +126,17 @@ cargo bench --package leann-core -- "hnsw_build"
 cargo bench --package leann-core -- "hnsw_search"
 ```
 
+### Feature flags for benchmarking
+
+Benchmarks only exercise the HNSW core (build, search, SIMD distance, I/O) and do not use chat, embedding providers, BM25, or the ZMQ server. The only feature required beyond the bare minimum is `parallel` (for `build_hnsw_with_pool`):
+
+```bash
+# Minimal feature set for benchmarks — skips compiling reqwest, tokio, zeromq, etc.
+cargo bench --package leann-core --no-default-features --features parallel
+```
+
+With default features the benchmarks compile and run identically; the flag just trims ~200 transitive crates from the build.
+
 ### Benchmark groups
 
 | Group | What it measures |

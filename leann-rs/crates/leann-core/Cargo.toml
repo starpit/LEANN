@@ -10,35 +10,64 @@ keywords = ["hnsw", "vector-search", "nearest-neighbor", "rag"]
 categories = ["algorithms", "science"]
 
 [dependencies]
+# Always-required
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 ndarray = { workspace = true }
 rand = { workspace = true }
-zeromq = { workspace = true }
-rmp-serde = { workspace = true }
-reqwest = { workspace = true }
-rayon = { workspace = true }
-memmap2 = { workspace = true }
-tiktoken-rs = { workspace = true }
-sha2 = { workspace = true }
 regex = { workspace = true }
-uuid = { workspace = true }
-indicatif = { workspace = true }
 libc = "0.2"
+
+# Optional — gated by features
+tokio = { workspace = true, optional = true }
+zeromq = { workspace = true, optional = true }
+rmp-serde = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+rayon = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
 pdf-extract = { workspace = true, optional = true }
 
+# Declared but currently unused in source — kept optional for future use
+memmap2 = { workspace = true, optional = true }
+tiktoken-rs = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
+indicatif = { workspace = true, optional = true }
+
 [features]
-default = ["pdf"]
+default = ["chat", "embedding-remote", "embedding-zmq", "parallel", "bm25", "watch", "pdf"]
+
+# PDF document loading
 pdf = ["dep:pdf-extract"]
+
+# LLM chat backends + ReAct agent (pulls in reqwest)
+chat = ["dep:reqwest"]
+
+# Remote embedding providers: OpenAI, Ollama, Gemini (pulls in reqwest + tokio)
+embedding-remote = ["dep:reqwest", "dep:tokio"]
+
+# ZMQ embedding server/client for recompute search (pulls in zeromq, rmp-serde, tokio)
+embedding-zmq = ["dep:zeromq", "dep:rmp-serde", "dep:tokio"]
+
+# Parallel HNSW build via rayon
+parallel = ["dep:rayon"]
+
+# BM25 keyword search
+bm25 = []
+
+# Merkle-tree incremental sync / file watching
+watch = ["dep:sha2"]
+
+# Everything
+full = ["chat", "embedding-remote", "embedding-zmq", "parallel", "bm25", "watch", "pdf"]
 
 [dev-dependencies]
 tempfile = "3"
 tokio = { workspace = true, features = ["test-util", "macros"] }
 criterion = { version = "0.8", features = ["html_reports"] }
+rayon = { workspace = true }
 
 [[bench]]
 name = "hnsw_benchmarks"

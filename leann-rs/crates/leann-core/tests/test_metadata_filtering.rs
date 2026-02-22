@@ -1,3 +1,4 @@
+#![cfg(feature = "bm25")]
 //! E2E-4: Metadata Filtering Integration Tests
 //!
 //! Tests all 13 metadata filter operators at the integration level by building

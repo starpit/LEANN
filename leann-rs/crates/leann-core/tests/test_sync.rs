@@ -1,3 +1,4 @@
+#![cfg(feature = "watch")]
 //! E2E-6: File Synchronization
 //!
 //! Tests Merkle tree change detection and FileSynchronizer.

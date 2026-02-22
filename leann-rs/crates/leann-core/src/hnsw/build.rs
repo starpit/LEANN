@@ -2,8 +2,10 @@ use anyhow::Result;
 use ndarray::Array2;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+#[cfg(feature = "parallel")]
 use std::sync::atomic::{AtomicI32, Ordering as AtomicOrdering};
 
+#[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
 use super::graph::*;
@@ -20,26 +22,35 @@ pub fn build_hnsw(data: &Array2<f32>, config: &HnswConfig) -> Result<HnswGraph> 
 }
 
 /// Build an HNSW graph with the specified number of threads.
-/// Creates a new rayon thread pool per call. If you're building multiple
-/// indexes, use [`build_hnsw_with_pool`] to reuse a single pool.
-/// Falls back to the serial path when `num_threads <= 1`.
+///
+/// With the `parallel` feature (default), creates a rayon thread pool and
+/// builds in parallel when `num_threads > 1`. Without `parallel`, always
+/// uses the serial path.
 pub fn build_hnsw_with_threads(
     data: &Array2<f32>,
     config: &HnswConfig,
-    num_threads: usize,
+    #[cfg_attr(not(feature = "parallel"), allow(unused_variables))] num_threads: usize,
 ) -> Result<HnswGraph> {
-    if num_threads <= 1 {
+    #[cfg(feature = "parallel")]
+    {
+        if num_threads <= 1 {
+            build_hnsw_serial(data, config)
+        } else {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(num_threads)
+                .build()?;
+            build_hnsw_with_pool(data, config, &pool)
+        }
+    }
+    #[cfg(not(feature = "parallel"))]
+    {
         build_hnsw_serial(data, config)
-    } else {
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(num_threads)
-            .build()?;
-        build_hnsw_with_pool(data, config, &pool)
     }
 }
 
 /// Build an HNSW graph using an existing rayon thread pool.
 /// Avoids the ~0.5-1ms cost of creating a new pool per call.
+#[cfg(feature = "parallel")]
 pub fn build_hnsw_with_pool(
     data: &Array2<f32>,
     config: &HnswConfig,
@@ -367,6 +378,7 @@ where
 }
 
 /// Parallel HNSW build using rayon and lock-free atomics.
+#[cfg(feature = "parallel")]
 fn build_hnsw_parallel(
     data: &Array2<f32>,
     config: &HnswConfig,
@@ -390,6 +402,7 @@ fn build_hnsw_parallel(
 /// Monomorphized parallel build. Generic `D` and `B` ensure the distance
 /// functions are inlined into the hot loops rather than called through
 /// function pointers.
+#[cfg(feature = "parallel")]
 fn build_hnsw_parallel_inner<D, B>(
     data: &Array2<f32>,
     config: &HnswConfig,
@@ -813,6 +826,7 @@ fn get_neighbors_mut_slice<'a>(
 }
 
 /// Read a neighbor slice from atomic storage (parallel path).
+#[cfg(feature = "parallel")]
 #[inline(always)]
 fn get_neighbors_atomic_slice<'a>(
     neighbors: &'a [AtomicI32],
@@ -941,6 +955,7 @@ fn add_link<D: Fn(&[f32], &[f32]) -> f32>(
 /// If there's an empty slot, CAS to claim it. Otherwise, snapshot all current
 /// neighbors, run shrink_neighbor_list with the new source included, and
 /// write back via CAS. Lost races are tolerated — HNSW is robust to them.
+#[cfg(feature = "parallel")]
 #[allow(clippy::too_many_arguments)]
 fn add_link_atomic<D: Fn(&[f32], &[f32]) -> f32>(
     neighbors: &[AtomicI32],
@@ -1036,6 +1051,7 @@ mod tests {
         assert!(graph.entry_point >= 0);
     }
 
+    #[cfg(feature = "parallel")]
     #[test]
     fn test_build_parallel_small_graph() {
         let data = Array2::from_shape_vec(
@@ -1071,6 +1087,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "parallel")]
     #[test]
     fn test_parallel_larger_graph() {
         // 100 random vectors in 16 dimensions

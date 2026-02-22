@@ -8,7 +8,7 @@ name = "leann"
 path = "src/main.rs"
 
 [dependencies]
-leann-core = { workspace = true, features = ["pdf"] }
+leann-core = { workspace = true, features = ["full"] }
 clap = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }

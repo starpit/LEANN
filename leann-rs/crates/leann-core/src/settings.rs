@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::env;
 
 const DEFAULT_OLLAMA_HOST: &str = "http://localhost:11434";

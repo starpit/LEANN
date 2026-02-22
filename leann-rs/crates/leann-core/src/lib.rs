@@ -18,8 +18,10 @@
 //! let results = searcher.search("hello", 5)?;
 //! ```
 
+#[cfg(feature = "bm25")]
 pub(crate) mod bm25;
 pub mod builder;
+#[cfg(feature = "chat")]
 pub mod chat;
 pub mod chunking;
 pub mod document_loaders;
@@ -28,13 +30,16 @@ pub mod hnsw;
 pub mod index;
 pub(crate) mod metadata_filter;
 pub mod passages;
+#[cfg(feature = "chat")]
 pub mod react_agent;
 pub mod search_result;
 pub mod searcher;
 pub(crate) mod settings;
+#[cfg(feature = "watch")]
 pub mod sync;
 
 pub use builder::LeannBuilder;
+#[cfg(feature = "chat")]
 pub use chat::LeannChat;
 pub use index::IndexMeta;
 pub use passages::{Passage, PassageManager};

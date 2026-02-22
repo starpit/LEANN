@@ -169,6 +169,39 @@ answer = chat.ask("What is HNSW?")
 print(answer)
 ```
 
+## Feature Flags
+
+`leann-core` uses Cargo feature flags to control compilation scope. All features are enabled by default.
+
+| Feature | Dependencies | What it enables |
+|---------|-------------|-----------------|
+| `chat` | `reqwest` | LLM chat backends (OpenAI, Anthropic, Gemini, Ollama) + ReAct agent |
+| `embedding-remote` | `reqwest`, `tokio` | Remote embedding providers (OpenAI, Ollama, Gemini) |
+| `embedding-zmq` | `zeromq`, `rmp-serde`, `tokio` | ZMQ embedding server/client for recompute search |
+| `parallel` | `rayon` | Parallel HNSW build via rayon thread pool |
+| `bm25` | -- | BM25 keyword search + hybrid search |
+| `watch` | `sha2` | Merkle-tree file change detection |
+| `pdf` | `pdf-extract` | PDF document loading |
+| `full` | *all of the above* | Everything |
+
+### Minimal builds
+
+```toml
+# HNSW-only (build, search, I/O, SIMD) — no network, no async, no rayon
+leann-core = { version = "0.1", default-features = false }
+
+# Add parallel build
+leann-core = { version = "0.1", default-features = false, features = ["parallel"] }
+
+# Search with BM25 but no LLM/embedding network calls
+leann-core = { version = "0.1", default-features = false, features = ["parallel", "bm25"] }
+
+# Full RAG application
+leann-core = { version = "0.1" }
+```
+
+With `--no-default-features`, the only required dependencies are `serde`, `ndarray`, `rand`, `regex`, and `tracing`.
+
 ## Architecture
 
 ### HNSW Engine
@@ -232,6 +265,10 @@ bash benchmarks/compare_rust_python.sh
 
 # Criterion benchmarks only (HTML reports in target/criterion/)
 cargo bench --package leann-core
+
+# Benchmarks only need the `parallel` feature (for build_hnsw_with_pool);
+# no-default-features + parallel is sufficient:
+cargo bench --package leann-core --no-default-features --features parallel
 ```
 
 ## Development
