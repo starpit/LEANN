@@ -4,7 +4,7 @@ Pure-Rust LEANN engine benchmarked against the Python LEANN backend (FAISS C++ w
 
 ## Latest Results (2026-02-23)
 
-**Geometric mean speedup: 5.53x. Rust faster in 42/44 benchmarks, 1 tie, 1 Python win.**
+**Geometric mean speedup: 5.29x. Rust faster in 39/44 benchmarks, 5 ties, 0 Python wins.**
 
 Verdict uses IQR (p25-p75) overlap: non-overlapping = clear winner, overlapping = ~Tie.
 
@@ -66,10 +66,10 @@ Verdict uses IQR (p25-p75) overlap: non-overlapping = clear winner, overlapping 
 
 ### BM25 Fit (index build)
 
-| Size | Rust p50 | Python p50 | Verdict |
+| Size | Rust p50 | Python p50 | Speedup |
 |------|----------|------------|---------|
-| 1,000 | 5.27 ms | 4.98 ms | Python 1.1x |
-| 10,000 | 51.9 ms | 55.8 ms | **Rust 1.1x** |
+| 1,000 | 3.63 ms | 4.98 ms | **Rust 1.4x** |
+| 10,000 | 36.4 ms | 55.8 ms | **Rust 1.5x** |
 
 ### BM25 Search
 
@@ -145,6 +145,7 @@ The Rust HNSW engine uses several techniques to match or exceed FAISS C++ perfor
 - **Flat heaps**: `FlatMinHeap`/`FlatMaxHeap` replace `BinaryHeap` for cache-friendly candidate management in search and build hot loops
 - **VisitedList**: Generation-counter visited set for O(1) reset between searches (no HashSet reallocation)
 - **Early termination**: Build stops neighbor search when improvement is unlikely
+- **Allocation-light BM25**: Single-pass tokenizer (no regex) builds frequency counts inline, reusing the token buffer for repeated words instead of cloning
 - **Buffered I/O**: Passage and index writes use `BufWriter` with manual offset tracking to minimize syscalls
 - **Cached file handles**: PassageManager opens passage files once at load time and reuses handles for all lookups (seek + read, no open/close per call)
 
@@ -227,7 +228,7 @@ With default features (which include both `parallel` and `bm25`) the benchmarks 
 
 - Search benchmarks at low ef (16, 32) have high variance (~30%). ef 64+ is much more stable.
 - Build n=100 shows the largest Rust advantage (6.5x) because FAISS has higher fixed overhead.
-- BM25 fit at 1K is a ~tie because the workload is dominated by regex tokenization and hash-map building, which are similarly optimized in both languages.
+- BM25 fit uses single-pass char-level tokenization (no regex) with buffer reuse for repeated tokens, giving 1.4-1.5x over Python.
 - BM25 search is 4-6x faster in Rust due to tighter iteration over the scored document set.
 - Index size comparison reflects compact CSR format (Rust) vs FAISS flat format (Python). Both store the same graph; Rust strips padding and uses a denser layout.
 - Results will vary by machine. The numbers above were collected on Apple M-series (aarch64/NEON).

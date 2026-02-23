@@ -1,4 +1,3 @@
-use regex::Regex;
 use std::collections::{HashMap, HashSet};
 
 use crate::search_result::SearchResult;
@@ -17,8 +16,6 @@ pub struct BM25Scorer {
     corpus_size: usize,
     /// Set of all document IDs.
     id_set: HashSet<String>,
-    /// Compiled regex for tokenization.
-    tokenizer_re: Regex,
 }
 
 impl BM25Scorer {
@@ -32,18 +29,44 @@ impl BM25Scorer {
             avg_doc_length: 0.0,
             corpus_size: 0,
             id_set: HashSet::new(),
-            tokenizer_re: Regex::new(r"[^\w\s]").unwrap(),
         }
     }
 
-    /// Tokenize text by removing punctuation and lowercasing.
+    /// Tokenize text: strip punctuation, lowercase, split on whitespace.
+    /// Single-pass char scanner — no regex, no intermediate String allocations.
     fn tokenize(&self, text: &str) -> Vec<String> {
-        let cleaned = self.tokenizer_re.replace_all(text, "");
-        cleaned
-            .to_lowercase()
-            .split_whitespace()
-            .map(String::from)
-            .collect()
+        let mut tokens = Vec::new();
+        let mut buf = String::new();
+        for ch in text.chars() {
+            if ch.is_alphanumeric() || ch == '_' {
+                for lc in ch.to_lowercase() {
+                    buf.push(lc);
+                }
+            } else if ch.is_whitespace() && !buf.is_empty() {
+                tokens.push(std::mem::take(&mut buf));
+            }
+            // else: punctuation — strip (equivalent to regex [^\w\s] → "")
+        }
+        if !buf.is_empty() {
+            tokens.push(buf);
+        }
+        tokens
+    }
+
+    /// Emit a token into `counts`, reusing `buf` when the token already exists.
+    #[inline]
+    fn emit_token(buf: &mut String, counts: &mut HashMap<String, usize>) {
+        if buf.is_empty() {
+            return;
+        }
+        // Fast path: token already seen → increment count, reuse buf allocation.
+        if let Some(c) = counts.get_mut(buf.as_str()) {
+            *c += 1;
+            buf.clear();
+        } else {
+            // First occurrence → move buf into the map (zero-copy).
+            counts.insert(std::mem::take(buf), 1);
+        }
     }
 
     /// Build BM25 statistics from a document corpus.
@@ -57,20 +80,33 @@ impl BM25Scorer {
         let mut total_length: usize = 0;
 
         for (doc_id, text) in documents {
-            let words = self.tokenize(text);
-            let doc_length = words.len();
+            // Single-pass: tokenize + count directly, no intermediate Vec.
+            let mut counts: HashMap<String, usize> = HashMap::new();
+            let mut buf = String::new();
+            let mut doc_length: usize = 0;
+
+            for ch in text.chars() {
+                if ch.is_alphanumeric() || ch == '_' {
+                    for lc in ch.to_lowercase() {
+                        buf.push(lc);
+                    }
+                } else if ch.is_whitespace() && !buf.is_empty() {
+                    doc_length += 1;
+                    Self::emit_token(&mut buf, &mut counts);
+                }
+            }
+            if !buf.is_empty() {
+                doc_length += 1;
+                Self::emit_token(&mut buf, &mut counts);
+            }
+
+            // Unique words = counts.keys() — no separate HashSet needed.
+            for word in counts.keys() {
+                *doc_freqs.entry(word.clone()).or_insert(0) += 1;
+            }
+
             self.doc_lengths.insert(doc_id.clone(), doc_length);
             total_length += doc_length;
-
-            let unique_words: HashSet<&String> = words.iter().collect();
-            for word in &unique_words {
-                *doc_freqs.entry((*word).clone()).or_insert(0) += 1;
-            }
-
-            let mut counts: HashMap<String, usize> = HashMap::new();
-            for word in &words {
-                *counts.entry(word.clone()).or_insert(0) += 1;
-            }
             self.word_counts.insert(doc_id.clone(), counts);
             self.id_set.insert(doc_id.clone());
         }
