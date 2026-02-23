@@ -13,12 +13,12 @@ Tracks how closely the Rust PyO3 bindings (`crates/leann-python`) match the Pyth
 
 | Category | Compliant | Partial | Non-compliant | Total |
 |----------|-----------|---------|---------------|-------|
-| Module-level functions | 1 | 0 | 1 | 2 |
-| Module exports | 4 | 0 | 2 | 6 |
+| Module-level functions | 2 | 0 | 0 | 2 |
+| Module exports | 5 | 0 | 1 | 6 |
 | `SearchResult` | 4 | 0 | 0 | 4 |
 | `LeannBuilder` | 9 | 1 | 2 | 12 |
 | `LeannSearcher` | 15 | 1 | 2 | 18 |
-| `LeannChat` | 5 | 1 | 3 | 9 |
+| `LeannChat` | 7 | 0 | 2 | 9 |
 | `ReActAgent` | 4 | 0 | 0 | 4 |
 | Backend registry | 1 | 0 | 3 | 4 |
 | Search features | 3 | 0 | 0 | 3 |
@@ -27,7 +27,7 @@ Tracks how closely the Rust PyO3 bindings (`crates/leann-python`) match the Pyth
 | On-disk format | 4 | 0 | 1 | 5 |
 | Exception mapping | 3 | 0 | 0 | 3 |
 | Lifecycle / cleanup | 3 | 1 | 0 | 4 |
-| **Total** | **74** | **4** | **15** | **93** |
+| **Total** | **78** | **3** | **12** | **93** |
 
 ---
 
@@ -36,7 +36,7 @@ Tracks how closely the Rust PyO3 bindings (`crates/leann-python`) match the Pyth
 | Feature | Python | Rust | Status | Notes |
 |---------|--------|------|--------|-------|
 | `get_registered_backends()` | Returns list of backend names | Returns `["hnsw"]` | Compliant | |
-| `create_react_agent()` | Convenience factory: `(index_path, llm_config, max_iterations, **searcher_kwargs)` | Not implemented | **Non-compliant** | Users must construct `ReActAgent` manually in Rust. |
+| `create_react_agent()` | Convenience factory: `(index_path, llm_config, max_iterations, **searcher_kwargs)` | `#[pyfunction]` with same signature | Compliant | Creates a `ReActAgent` from `index_path`. |
 
 `compute_embeddings()` and `compute_embeddings_via_server()` are internal to the Python API and not part of the public binding surface.
 
@@ -51,7 +51,7 @@ Tracks how closely the Rust PyO3 bindings (`crates/leann-python`) match the Pyth
 | `LeannChat` | Yes | Yes | Compliant | |
 | `ReActAgent` | Yes | Yes | Compliant | |
 | `BACKEND_REGISTRY` | Yes (dict) | Not exposed | **Non-compliant** | Rust has no registry dict; `get_registered_backends()` covers the read path. |
-| `create_react_agent` | Yes | Not exposed | **Non-compliant** | See module-level functions above. |
+| `create_react_agent` | Yes | Yes | Compliant | Registered via `wrap_pyfunction!`. |
 
 Python also exports `SearchResult` via the dataclass import path; Rust exposes it as a `#[pyclass]`.
 
@@ -120,9 +120,9 @@ Python also exports `SearchResult` via the dataclass import path; Rust exposes i
 | Constructor: `index_path` | Required | Required | Compliant | |
 | Constructor: `llm_config` | Dict with `type`, `model`, `api_key`, `base_url`, `host` | Dict with `type`, `model`, `api_key`, `base_url`, `host` | Compliant | See LlmConfig fields section for per-field breakdown. |
 | Constructor: `enable_warmup` | Controls warmup (default `False`) | Forwarded to `SearcherOptions` via `new_with_options` | Compliant | Warmup delegated to the inner `LeannSearcher`. |
-| Constructor: `searcher` | Accept existing `LeannSearcher` to share | Not supported | **Non-compliant** | Rust always creates its own searcher from `index_path`. |
-| `ask()` signature | Full search params + `llm_kwargs` | `(question, top_k=5, **kwargs)` | **Partial** | Search kwargs forwarded to `ask_with_params`, but `llm_kwargs` not separated out. |
-| `ask()`: `llm_kwargs` | Forwarded to LLM provider | Not wired | **Non-compliant** | LLM always uses default params. |
+| Constructor: `searcher` | Accept existing `LeannSearcher` to share | Accepted; uses searcher's `index_path` to open | Compliant | Same pattern as `ReActAgent`: re-opens from the searcher's path. |
+| `ask()` signature | Full search params + `llm_kwargs` | `(question, top_k=5, **kwargs)` | Compliant | Search kwargs and LLM kwargs both extracted from `**kwargs`. |
+| `ask()`: `llm_kwargs` | Forwarded to LLM provider | Extracted (`temperature`, `max_tokens`, `top_p`, extras) and forwarded | Compliant | Built into `LlmParams` and passed to `ask_with_params`. |
 | `start_interactive()` | REPL mode | Not implemented | **Non-compliant** | CLI handles interactive mode separately. |
 | `cleanup()` | Stops embedding server if owns searcher | Delegates to inner searcher cleanup | Compliant | |
 | Context manager | `__enter__` / `__exit__` | `__enter__` returns self, `__exit__` calls `cleanup()` | Compliant | |
@@ -238,7 +238,7 @@ Error mapping uses `anyhow_to_pyerr()` which inspects the error message for patt
 | `__enter__` / `__exit__` | `LeannSearcher`, `LeannChat` | Same | Compliant | |
 | `cleanup()` | Explicit method on both classes | Explicit method on both classes | Compliant | |
 | `__del__` destructor | `LeannSearcher.__del__`, `LeannChat.__del__` call `cleanup()` | `Drop` trait on `LeannSearcher` calls `cleanup()` | **Partial** | `LeannChat` in Rust relies on `LeannSearcher`'s `Drop` but has no explicit `Drop` impl itself. Functionally equivalent since the inner searcher is cleaned up. |
-| `_owns_searcher` guard | `LeannChat.cleanup()` only stops server if it created the searcher | Always cleans up (no shared-searcher support) | Compliant | Moot since Rust doesn't support `searcher=...` kwarg. |
+| `_owns_searcher` guard | `LeannChat.cleanup()` only stops server if it created the searcher | Always cleans up (always re-opens from path) | Compliant | Rust re-opens from the searcher's `index_path`, so always owns its searcher. |
 
 ---
 
@@ -291,7 +291,7 @@ Note: Python's `SimulatedChat` exists (type `"simulated"` in `get_llm`).
 ### Medium (functional gaps)
 
 2. **`build_index` embedding provider flexibility** — Rust hardcodes Ollama; Python respects `embedding_mode`. Either wire the Rust builder to select provider from mode, or document the limitation clearly.
-3. **`LeannChat.ask()`: `llm_kwargs`** — Forward extra LLM params (temperature, max_tokens, etc.) to the chat provider.
+3. ~~**`LeannChat.ask()`: `llm_kwargs`**~~ — Resolved: `temperature`, `max_tokens`, `top_p`, and extras extracted from kwargs and forwarded via `LlmParams`.
 4. **`search()`: `provider_options`** — Wire through PyO3 to allow query template overrides at search time.
 5. ~~**`distance_metric` kwargs extraction**~~ — Resolved: extracted from PyO3 kwargs and applied via `with_distance_metric()`.
 6. ~~**`pruning_strategy` kwargs extraction**~~ — Resolved: extracted from kwargs and forwarded to `SearchParams`.
@@ -300,13 +300,13 @@ Note: Python's `SimulatedChat` exists (type `"simulated"` in `get_llm`).
 
 ### Low (polish)
 
-9. **`LeannChat(searcher=...)` kwarg** — Accept an existing searcher to avoid re-opening.
+9. ~~**`LeannChat(searcher=...)` kwarg**~~ — Resolved: accepts optional `searcher` parameter; uses searcher's `index_path` to re-open.
 10. **`update_index()`** — Incremental append for `LeannBuilder`.
 11. **`start_interactive()`** — REPL mode for `LeannChat` (CLI handles this separately).
 12. ~~**`ReActAgent.search()`**~~ — Resolved: exposed as PyO3 method, delegates to `LeannSearcher.search()`.
 13. **`build_index_from_embeddings` pickle overload** — Accept a pickle file path in addition to direct data.
 14. ~~**Normalized-embedding auto-detection**~~ — Resolved: `is_normalized_embeddings_model()` in `builder.rs` checks known models + patterns, auto-sets cosine distance.
-15. **`create_react_agent()` convenience function** — Expose as `#[pyfunction]` in the module.
+15. ~~**`create_react_agent()` convenience function**~~ — Resolved: exposed as `#[pyfunction]` with matching signature.
 
 ---
 

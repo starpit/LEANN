@@ -310,15 +310,21 @@ impl LeannChat {
 
     /// Ask a question using RAG (retrieve context, then generate answer).
     pub fn ask(&self, question: &str, top_k: usize) -> Result<String> {
-        self.ask_with_params(question, top_k, &crate::searcher::SearchConfig::default())
+        self.ask_with_params(
+            question,
+            top_k,
+            &crate::searcher::SearchConfig::default(),
+            &LlmParams::default(),
+        )
     }
 
-    /// Ask a question using RAG with full search configuration.
+    /// Ask a question using RAG with full search and LLM configuration.
     pub fn ask_with_params(
         &self,
         question: &str,
         top_k: usize,
         config: &crate::searcher::SearchConfig,
+        llm_params: &LlmParams,
     ) -> Result<String> {
         let results = self.searcher.search_with_params(question, top_k, config)?;
 
@@ -340,7 +346,7 @@ impl LeannChat {
             "Sending RAG prompt to LLM ({} context results)",
             results.len()
         );
-        let answer = self.llm.ask(&prompt, &LlmParams::default())?;
+        let answer = self.llm.ask(&prompt, llm_params)?;
         Ok(answer)
     }
 

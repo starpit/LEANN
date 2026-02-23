@@ -104,6 +104,54 @@ fn anyhow_to_pyerr(e: anyhow::Error) -> PyErr {
     }
 }
 
+/// Extract LlmParams from Python kwargs dict.
+///
+/// Pulls `temperature`, `max_tokens`, `top_p` from the dict.
+/// Any remaining keys that aren't search-config keys go into `extra`.
+fn extract_llm_params(kw: Option<&Bound<'_, PyDict>>) -> leann_core::chat::LlmParams {
+    let Some(kw) = kw else {
+        return leann_core::chat::LlmParams::default();
+    };
+
+    let mut params = leann_core::chat::LlmParams::default();
+
+    if let Some(v) = extract_kwarg::<f64>(kw, &["temperature"]) {
+        params.temperature = Some(v);
+    }
+    if let Some(v) = extract_kwarg::<usize>(kw, &["max_tokens"]) {
+        params.max_tokens = Some(v);
+    }
+    if let Some(v) = extract_kwarg::<f64>(kw, &["top_p"]) {
+        params.top_p = Some(v);
+    }
+
+    // Remaining keys that aren't search-config or llm-param keys go into extra.
+    let known_keys: &[&str] = &[
+        "temperature",
+        "max_tokens",
+        "top_p",
+        "complexity",
+        "beam_width",
+        "prune_ratio",
+        "batch_size",
+        "use_grep",
+        "gemma",
+        "expected_zmq_port",
+        "zmq_port",
+        "pruning_strategy",
+        "metadata_filters",
+    ];
+    for (key, value) in kw.iter() {
+        if let Ok(key_str) = key.extract::<String>() {
+            if !known_keys.contains(&key_str.as_str()) {
+                params.extra.insert(key_str, py_to_json_value(&value));
+            }
+        }
+    }
+
+    params
+}
+
 /// Extract a SearchConfig from Python kwargs dict.
 fn extract_search_config(kw: Option<&Bound<'_, PyDict>>) -> SearchConfig {
     let Some(kw) = kw else {
@@ -400,61 +448,69 @@ impl LeannSearcher {
 /// RAG chat interface combining search + LLM.
 ///
 /// Signature matches the Python `LeannChat`:
-///   LeannChat(index_path, llm_config=None, enable_warmup=False, **kwargs)
+///   LeannChat(index_path, llm_config=None, enable_warmup=False, searcher=None, **kwargs)
 #[pyclass]
 struct LeannChat {
     inner: leann_core::chat::LeannChat,
 }
 
+/// Extract an LlmConfig from a Python dict.
+fn extract_llm_config(cfg: &Bound<'_, PyDict>) -> leann_core::chat::LlmConfig {
+    let llm_type = cfg
+        .get_item("type")
+        .ok()
+        .flatten()
+        .and_then(|v| v.extract::<String>().ok())
+        .unwrap_or_else(|| "openai".to_string());
+    let model = cfg
+        .get_item("model")
+        .ok()
+        .flatten()
+        .and_then(|v| v.extract::<String>().ok());
+    let api_key = cfg
+        .get_item("api_key")
+        .ok()
+        .flatten()
+        .and_then(|v| v.extract::<String>().ok());
+    let base_url = cfg
+        .get_item("base_url")
+        .ok()
+        .flatten()
+        .and_then(|v| v.extract::<String>().ok());
+    let host = cfg
+        .get_item("host")
+        .ok()
+        .flatten()
+        .and_then(|v| v.extract::<String>().ok());
+
+    leann_core::chat::LlmConfig {
+        llm_type,
+        model,
+        api_key,
+        base_url,
+        host,
+    }
+}
+
 #[pymethods]
 impl LeannChat {
     #[new]
-    #[pyo3(signature = (index_path, llm_config=None, enable_warmup=false, **kwargs))]
+    #[pyo3(signature = (index_path, llm_config=None, enable_warmup=false, searcher=None, **kwargs))]
     #[allow(unused_variables)]
     fn new(
         index_path: &str,
         llm_config: Option<&Bound<'_, PyDict>>,
         enable_warmup: bool,
+        searcher: Option<&Bound<'_, LeannSearcher>>,
         kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Self> {
-        let config = if let Some(cfg) = llm_config {
-            let llm_type = cfg
-                .get_item("type")
-                .ok()
-                .flatten()
-                .and_then(|v| v.extract::<String>().ok())
-                .unwrap_or_else(|| "openai".to_string());
-            let model = cfg
-                .get_item("model")
-                .ok()
-                .flatten()
-                .and_then(|v| v.extract::<String>().ok());
-            let api_key = cfg
-                .get_item("api_key")
-                .ok()
-                .flatten()
-                .and_then(|v| v.extract::<String>().ok());
+        let config = llm_config.map(extract_llm_config);
 
-            let base_url = cfg
-                .get_item("base_url")
-                .ok()
-                .flatten()
-                .and_then(|v| v.extract::<String>().ok());
-            let host = cfg
-                .get_item("host")
-                .ok()
-                .flatten()
-                .and_then(|v| v.extract::<String>().ok());
-
-            Some(leann_core::chat::LlmConfig {
-                llm_type,
-                model,
-                api_key,
-                base_url,
-                host,
-            })
+        // If a searcher is provided, use its index_path (same pattern as ReActAgent).
+        let effective_path = if let Some(s) = searcher {
+            s.borrow().index_path.clone()
         } else {
-            None
+            index_path.to_string()
         };
 
         let searcher_options = leann_core::SearcherOptions {
@@ -462,7 +518,7 @@ impl LeannChat {
             enable_warmup,
         };
         let chat = leann_core::chat::LeannChat::new_with_options(
-            &PathBuf::from(index_path),
+            &PathBuf::from(&effective_path),
             config.as_ref(),
             &searcher_options,
         )
@@ -471,10 +527,11 @@ impl LeannChat {
         Ok(Self { inner: chat })
     }
 
-    /// Ask a question using RAG with optional search configuration kwargs.
+    /// Ask a question using RAG with optional search and LLM configuration kwargs.
     ///
-    /// Supported kwargs: complexity, beam_width, prune_ratio, metadata_filters,
+    /// Search kwargs: complexity, beam_width, prune_ratio, metadata_filters,
     /// batch_size, use_grep, gemma, expected_zmq_port.
+    /// LLM kwargs: temperature, max_tokens, top_p (plus any extras).
     #[pyo3(signature = (question, top_k=5, **kwargs))]
     fn ask(
         &self,
@@ -484,10 +541,11 @@ impl LeannChat {
         kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<String> {
         let config = extract_search_config(kwargs);
+        let llm_params = extract_llm_params(kwargs);
         let question_owned = question.to_string();
         py.allow_threads(|| {
             self.inner
-                .ask_with_params(&question_owned, top_k, &config)
+                .ask_with_params(&question_owned, top_k, &config, &llm_params)
                 .map_err(anyhow_to_pyerr)
         })
     }
@@ -595,6 +653,24 @@ fn get_registered_backends() -> Vec<String> {
     vec!["hnsw".to_string()]
 }
 
+/// Convenience factory matching Python's `create_react_agent()`.
+///
+/// Signature: `create_react_agent(index_path, llm_config=None, max_iterations=5, **searcher_kwargs)`
+#[pyfunction]
+#[pyo3(signature = (index_path, llm_config=None, max_iterations=5, **searcher_kwargs))]
+#[allow(unused_variables)]
+fn create_react_agent(
+    index_path: &str,
+    llm_config: Option<&Bound<'_, PyDict>>,
+    max_iterations: usize,
+    searcher_kwargs: Option<&Bound<'_, PyDict>>,
+) -> PyResult<ReActAgent> {
+    Ok(ReActAgent {
+        searcher_path: index_path.to_string(),
+        max_iterations,
+    })
+}
+
 /// LEANN Python module.
 #[pymodule]
 fn leann(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -604,5 +680,6 @@ fn leann(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<LeannChat>()?;
     m.add_class::<ReActAgent>()?;
     m.add_function(wrap_pyfunction!(get_registered_backends, m)?)?;
+    m.add_function(wrap_pyfunction!(create_react_agent, m)?)?;
     Ok(())
 }
