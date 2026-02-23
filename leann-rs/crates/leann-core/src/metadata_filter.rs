@@ -1,4 +1,5 @@
 use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use tracing::warn;
 
@@ -52,6 +53,28 @@ impl MetadataFilterEngine {
         true
     }
 
+    /// Evaluate filters directly against a flat metadata map.
+    /// Unlike `apply_filters`, this does not look for a nested "metadata" key —
+    /// it matches field names directly in the provided map.
+    pub fn matches_metadata(
+        &self,
+        metadata: &HashMap<String, Value>,
+        filters: &MetadataFilters,
+    ) -> bool {
+        for (field_name, filter_spec) in filters {
+            let field_value = match metadata.get(field_name) {
+                Some(v) if !v.is_null() => v,
+                _ => return false,
+            };
+            for (operator, expected_value) in filter_spec {
+                if !self.evaluate_operator(field_value, operator, expected_value) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     /// Evaluate a single field filter against a result.
     fn evaluate_field_filter(
         &self,
@@ -73,32 +96,39 @@ impl MetadataFilterEngine {
         };
 
         for (operator, expected_value) in filter_spec {
-            let passes = match operator.as_str() {
-                "==" => self.op_equals(field_value, expected_value),
-                "!=" => self.op_not_equals(field_value, expected_value),
-                "<" => self.op_less_than(field_value, expected_value),
-                "<=" => self.op_less_than_or_equal(field_value, expected_value),
-                ">" => self.op_greater_than(field_value, expected_value),
-                ">=" => self.op_greater_than_or_equal(field_value, expected_value),
-                "in" => self.op_in(field_value, expected_value),
-                "not_in" => self.op_not_in(field_value, expected_value),
-                "contains" => self.op_contains(field_value, expected_value),
-                "starts_with" => self.op_starts_with(field_value, expected_value),
-                "ends_with" => self.op_ends_with(field_value, expected_value),
-                "is_true" => self.op_is_true(field_value),
-                "is_false" => self.op_is_false(field_value),
-                unknown => {
-                    warn!("Unsupported filter operator: {}", unknown);
-                    false
-                }
-            };
-
-            if !passes {
+            if !self.evaluate_operator(field_value, operator, expected_value) {
                 return false;
             }
         }
 
         true
+    }
+
+    fn evaluate_operator(
+        &self,
+        field_value: &Value,
+        operator: &str,
+        expected_value: &Value,
+    ) -> bool {
+        match operator {
+            "==" => self.op_equals(field_value, expected_value),
+            "!=" => self.op_not_equals(field_value, expected_value),
+            "<" => self.op_less_than(field_value, expected_value),
+            "<=" => self.op_less_than_or_equal(field_value, expected_value),
+            ">" => self.op_greater_than(field_value, expected_value),
+            ">=" => self.op_greater_than_or_equal(field_value, expected_value),
+            "in" => self.op_in(field_value, expected_value),
+            "not_in" => self.op_not_in(field_value, expected_value),
+            "contains" => self.op_contains(field_value, expected_value),
+            "starts_with" => self.op_starts_with(field_value, expected_value),
+            "ends_with" => self.op_ends_with(field_value, expected_value),
+            "is_true" => self.op_is_true(field_value),
+            "is_false" => self.op_is_false(field_value),
+            unknown => {
+                warn!("Unsupported filter operator: {}", unknown);
+                false
+            }
+        }
     }
 
     // --- Comparison operators ---
@@ -148,19 +178,19 @@ impl MetadataFilterEngine {
     fn op_contains(&self, field: &Value, expected: &Value) -> bool {
         let field_str = value_to_string(field);
         let expected_str = value_to_string(expected);
-        field_str.contains(&expected_str)
+        field_str.contains(&*expected_str)
     }
 
     fn op_starts_with(&self, field: &Value, expected: &Value) -> bool {
         let field_str = value_to_string(field);
         let expected_str = value_to_string(expected);
-        field_str.starts_with(&expected_str)
+        field_str.starts_with(&*expected_str)
     }
 
     fn op_ends_with(&self, field: &Value, expected: &Value) -> bool {
         let field_str = value_to_string(field);
         let expected_str = value_to_string(expected);
-        field_str.ends_with(&expected_str)
+        field_str.ends_with(&*expected_str)
     }
 
     // --- Boolean operators ---
@@ -218,13 +248,13 @@ fn value_to_f64(v: &Value) -> Option<f64> {
     }
 }
 
-fn value_to_string(v: &Value) -> String {
+fn value_to_string(v: &Value) -> Cow<'_, str> {
     match v {
-        Value::String(s) => s.clone(),
-        Value::Number(n) => n.to_string(),
-        Value::Bool(b) => b.to_string(),
-        Value::Null => "null".to_string(),
-        other => other.to_string(),
+        Value::String(s) => Cow::Borrowed(s.as_str()),
+        Value::Number(n) => Cow::Owned(n.to_string()),
+        Value::Bool(b) => Cow::Borrowed(if *b { "true" } else { "false" }),
+        Value::Null => Cow::Borrowed("null"),
+        other => Cow::Owned(other.to_string()),
     }
 }
 

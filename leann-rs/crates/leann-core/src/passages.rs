@@ -135,40 +135,10 @@ impl PassageManager {
             return results.to_vec();
         }
 
-        // Convert to dict format for the filter engine
-        let result_dicts: Vec<HashMap<String, serde_json::Value>> = results
+        results
             .iter()
-            .map(|r| {
-                let mut map = HashMap::new();
-                map.insert("id".to_string(), serde_json::Value::String(r.id.clone()));
-                map.insert("score".to_string(), serde_json::json!(r.score));
-                map.insert(
-                    "text".to_string(),
-                    serde_json::Value::String(r.text.clone()),
-                );
-                map.insert(
-                    "metadata".to_string(),
-                    serde_json::to_value(&r.metadata).unwrap_or_default(),
-                );
-                map
-            })
-            .collect();
-
-        let filtered = self.filter_engine.apply_filters(&result_dicts, filters);
-
-        filtered
-            .into_iter()
-            .filter_map(|d| {
-                Some(SearchResult {
-                    id: d.get("id")?.as_str()?.to_string(),
-                    score: d.get("score")?.as_f64()?,
-                    text: d.get("text")?.as_str()?.to_string(),
-                    metadata: d
-                        .get("metadata")
-                        .and_then(|v| serde_json::from_value(v.clone()).ok())
-                        .unwrap_or_default(),
-                })
-            })
+            .filter(|r| self.filter_engine.matches_metadata(&r.metadata, filters))
+            .cloned()
             .collect()
     }
 
@@ -221,9 +191,10 @@ pub fn write_passages(
 
 /// Write the ID map file (one ID per line, in order).
 pub fn write_id_map(ids: &[String], path: &Path) -> Result<()> {
-    let mut file = File::create(path)?;
+    let file = File::create(path)?;
+    let mut writer = std::io::BufWriter::new(file);
     for id in ids {
-        writeln!(file, "{}", id)?;
+        writeln!(writer, "{}", id)?;
     }
     Ok(())
 }

@@ -2,83 +2,82 @@
 ///
 /// Handles common sentence-ending punctuation (. ! ?) while avoiding
 /// false splits on abbreviations and decimal numbers.
+/// Uses byte-level boundary detection to avoid allocating a Vec<char>.
 pub fn split_sentences(text: &str) -> Vec<String> {
     if text.is_empty() {
         return Vec::new();
     }
 
     let mut sentences = Vec::new();
-    let mut current = String::new();
-    let chars: Vec<char> = text.chars().collect();
-    let len = chars.len();
+    let bytes = text.as_bytes();
+    let mut start = 0; // byte offset of current sentence start
 
-    let mut i = 0;
-    while i < len {
-        let ch = chars[i];
-        current.push(ch);
-
-        if (ch == '.' || ch == '!' || ch == '?') && !current.trim().is_empty() {
-            // Check if this is a real sentence boundary
+    for (byte_pos, ch) in text.char_indices() {
+        if ch == '.' || ch == '!' || ch == '?' {
             let is_boundary = if ch == '.' {
-                is_sentence_boundary(&chars, i)
+                is_sentence_boundary_bytes(bytes, byte_pos)
             } else {
                 true
             };
 
             if is_boundary {
-                let trimmed = current.trim().to_string();
+                let end = byte_pos + 1; // . ! ? are single-byte ASCII
+                let trimmed = text[start..end].trim();
                 if !trimmed.is_empty() {
-                    sentences.push(trimmed);
+                    sentences.push(trimmed.to_string());
                 }
-                current.clear();
+                start = end;
             }
         }
-
-        i += 1;
     }
 
     // Add remaining text as last sentence
-    let trimmed = current.trim().to_string();
+    let trimmed = text[start..].trim();
     if !trimmed.is_empty() {
-        sentences.push(trimmed);
+        sentences.push(trimmed.to_string());
     }
 
     sentences
 }
 
-/// Check if a period at position `pos` is a sentence boundary.
-fn is_sentence_boundary(chars: &[char], pos: usize) -> bool {
-    let len = chars.len();
+/// Check if a period at byte position `pos` is a sentence boundary.
+/// All checks use ASCII-level byte inspection, which is correct because
+/// the sentence-ending punctuation (.) and the surrounding context
+/// characters we care about (digits, uppercase letters, whitespace) are ASCII.
+fn is_sentence_boundary_bytes(bytes: &[u8], pos: usize) -> bool {
+    let len = bytes.len();
 
-    // Not a boundary if followed by a digit (decimal number)
-    if pos + 1 < len && chars[pos + 1].is_ascii_digit() {
+    // Not a boundary if followed by a digit (decimal number: "3.14")
+    if pos + 1 < len && bytes[pos + 1].is_ascii_digit() {
         return false;
     }
 
-    // Not a boundary if preceded by a single uppercase letter (abbreviation like "U.S.")
+    // Not a boundary if preceded by a single uppercase letter (abbreviation: "U.S.")
     if pos >= 1
-        && chars[pos - 1].is_ascii_uppercase()
-        && (pos < 2 || !chars[pos - 2].is_alphanumeric())
+        && bytes[pos - 1].is_ascii_uppercase()
+        && (pos < 2 || !bytes[pos - 2].is_ascii_alphanumeric())
     {
         return false;
     }
 
-    // Is a boundary if followed by whitespace + uppercase, or end of text
+    // Is a boundary if at end of text
     if pos + 1 >= len {
         return true;
     }
 
-    if pos + 2 < len && chars[pos + 1].is_whitespace() && chars[pos + 2].is_uppercase() {
+    // Is a boundary if followed by whitespace + uppercase
+    if pos + 2 < len && bytes[pos + 1].is_ascii_whitespace() && bytes[pos + 2].is_ascii_uppercase()
+    {
         return true;
     }
 
     // Is a boundary if followed by whitespace
-    if chars[pos + 1].is_whitespace() {
+    if bytes[pos + 1].is_ascii_whitespace() {
         return true;
     }
 
     // Default: followed by newline counts
-    if chars[pos + 1] == '\n' {
+    if bytes[pos + 1] == b'\n' {
         return true;
     }
 

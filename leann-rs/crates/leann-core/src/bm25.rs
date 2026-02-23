@@ -102,7 +102,11 @@ impl BM25Scorer {
 
             // Unique words = counts.keys() — no separate HashSet needed.
             for word in counts.keys() {
-                *doc_freqs.entry(word.clone()).or_insert(0) += 1;
+                if let Some(c) = doc_freqs.get_mut(word.as_str()) {
+                    *c += 1;
+                } else {
+                    doc_freqs.insert(word.clone(), 1);
+                }
             }
 
             self.doc_lengths.insert(doc_id.clone(), doc_length);
@@ -154,12 +158,12 @@ impl BM25Scorer {
     pub fn search(&self, query: &str, top_k: usize) -> Vec<SearchResult> {
         let query_words = self.tokenize(query);
 
-        let mut scores: Vec<(String, f64)> = self
+        let mut scores: Vec<(&str, f64)> = self
             .id_set
             .iter()
             .map(|doc_id| {
                 let s = self.score(&query_words, doc_id);
-                (doc_id.clone(), s)
+                (doc_id.as_str(), s)
             })
             .collect();
 
@@ -168,7 +172,7 @@ impl BM25Scorer {
 
         scores
             .into_iter()
-            .map(|(id, score)| SearchResult::new(id, score, String::new()))
+            .map(|(id, score)| SearchResult::new(id.to_string(), score, String::new()))
             .collect()
     }
 

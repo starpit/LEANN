@@ -319,7 +319,7 @@ fn chunk_generic(
     for (i, line) in lines.iter().enumerate() {
         if current.len() + line.len() + 1 > max_chunk_size && !current.is_empty() {
             chunks.push(CodeChunk {
-                text: current.clone(),
+                text: std::mem::take(&mut current),
                 chunk_type: "block".to_string(),
                 name: None,
                 start_line: start_line + 1,
@@ -327,7 +327,6 @@ fn chunk_generic(
                 language: language.to_string(),
                 metadata: make_metadata(filename, start_line + 1, i),
             });
-            current.clear();
             start_line = i;
         }
 
@@ -390,8 +389,7 @@ fn split_large_block(lines: &[&str], max_size: usize) -> Vec<String> {
 
     for line in lines {
         if current.len() + line.len() + 1 > max_size && !current.is_empty() {
-            chunks.push(current.clone());
-            current.clear();
+            chunks.push(std::mem::take(&mut current));
         }
 
         // If a single line exceeds max_size, split it by characters

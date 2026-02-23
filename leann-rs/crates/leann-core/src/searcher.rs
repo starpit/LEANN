@@ -264,7 +264,7 @@ impl LeannSearcher {
                         string_id,
                         *dist as f64,
                         passage.text,
-                        passage.metadata.clone(),
+                        passage.metadata,
                     ));
                 }
                 Err(e) => {
@@ -288,28 +288,37 @@ impl LeannSearcher {
             let mut hybrid_scores: HashMap<String, f64> = HashMap::new();
 
             for r in &results {
-                *hybrid_scores.entry(r.id.clone()).or_default() += config.gemma * r.score;
+                if let Some(s) = hybrid_scores.get_mut(&r.id) {
+                    *s += config.gemma * r.score;
+                } else {
+                    hybrid_scores.insert(r.id.clone(), config.gemma * r.score);
+                }
             }
             for r in &bm25_results {
-                *hybrid_scores.entry(r.id.clone()).or_default() += bm25_weight * r.score;
+                if let Some(s) = hybrid_scores.get_mut(&r.id) {
+                    *s += bm25_weight * r.score;
+                } else {
+                    hybrid_scores.insert(r.id.clone(), bm25_weight * r.score);
+                }
             }
 
             let mut sorted: Vec<(String, f64)> = hybrid_scores.into_iter().collect();
             sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             sorted.truncate(top_k);
 
+            // Build lookup for text/metadata to avoid O(k·n) linear scans
+            let result_lookup: HashMap<&str, usize> = results
+                .iter()
+                .enumerate()
+                .map(|(i, r)| (r.id.as_str(), i))
+                .collect();
+
             let mut hybrid_results = Vec::new();
             for (id, score) in sorted {
-                let text = results
-                    .iter()
-                    .find(|r| r.id == id)
-                    .map(|r| r.text.clone())
-                    .unwrap_or_default();
-                let metadata = results
-                    .iter()
-                    .find(|r| r.id == id)
-                    .map(|r| r.metadata.clone())
-                    .unwrap_or_default();
+                let (text, metadata) = match result_lookup.get(id.as_str()) {
+                    Some(&idx) => (results[idx].text.clone(), results[idx].metadata.clone()),
+                    None => (String::new(), HashMap::new()),
+                };
                 hybrid_results.push(SearchResult::with_metadata(id, score, text, metadata));
             }
 
