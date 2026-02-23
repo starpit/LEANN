@@ -42,6 +42,10 @@ pub use builder::LeannBuilder;
 #[cfg(feature = "chat")]
 pub use chat::LeannChat;
 pub use index::IndexMeta;
+pub use metadata_filter::{FilterSpec, MetadataFilterEngine, MetadataFilters};
 pub use passages::{Passage, PassageManager};
 pub use search_result::SearchResult;
 pub use searcher::{LeannSearcher, SearcherOptions};
+
+#[cfg(feature = "bm25")]
+pub use bm25::BM25Scorer;

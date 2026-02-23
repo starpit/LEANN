@@ -174,7 +174,7 @@ fn main() {
     // ── Distance computation ────────────────────────────────────────
     // Batch multiple calls per timing interval to overcome Instant::now() overhead
     // (~20-50ns on macOS), which would drown out sub-100ns operations.
-    eprintln!("\n[1/6] Distance computation...");
+    eprintln!("\n[1/15] Distance computation...");
     let dist_batch = 1000;
     for dim in [128, 384, 768] {
         let mut rng = StdRng::seed_from_u64(42);
@@ -211,7 +211,7 @@ fn main() {
     }
 
     // ── HNSW build ──────────────────────────────────────────────────
-    eprintln!("[2/6] HNSW build...");
+    eprintln!("[2/15] HNSW build...");
     let config = HnswConfig {
         m: 32,
         ef_construction: 200,
@@ -251,7 +251,7 @@ fn main() {
     }
 
     // ── HNSW search (stored vectors) ────────────────────────────────
-    eprintln!("[3/6] HNSW search (stored vectors)...");
+    eprintln!("[3/15] HNSW search (stored vectors)...");
     {
         let n = 10_000;
         let d = 384;
@@ -293,7 +293,7 @@ fn main() {
     }
 
     // ── HNSW search (recompute) ─────────────────────────────────────
-    eprintln!("[4/6] HNSW search (recompute with in-memory callback)...");
+    eprintln!("[4/15] HNSW search (recompute with in-memory callback)...");
     {
         let n = 10_000;
         let d = 384;
@@ -363,7 +363,7 @@ fn main() {
     }
 
     // ── Full pipeline (build + write + read + search) ───────────────
-    eprintln!("[5/6] Full pipeline...");
+    eprintln!("[5/15] Full pipeline...");
     {
         let d = 384;
         let top_k = 10;
@@ -409,7 +409,7 @@ fn main() {
     }
 
     // ── Passage lookup ────────────────────────────────────────────────
-    eprintln!("[6/6] Passage lookup...");
+    eprintln!("[6/15] Passage lookup...");
     {
         use leann_core::index::PassageSource;
         use leann_core::passages::{Passage, PassageManager, write_id_map, write_passages};
@@ -475,6 +475,412 @@ fn main() {
             results.insert(
                 format!("passage_lookup/{n}"),
                 BenchResult::from_times(&times).scaled(1.0 / lookup_indices.len() as f64),
+            );
+        }
+    }
+
+    // ── Text chunking ──────────────────────────────────────────────
+    eprintln!("[7/15] Text chunking...");
+    {
+        use leann_core::chunking::chunk_text;
+
+        let base_sentences = [
+            "The quick brown fox jumps over the lazy dog.",
+            "Machine learning algorithms can identify patterns in large datasets.",
+            "Vector databases enable similarity search across high-dimensional spaces.",
+            "Rust provides memory safety without garbage collection.",
+            "Neural networks are inspired by the structure of the human brain.",
+            "Cloud computing offers scalable infrastructure for modern applications.",
+            "Natural language processing has advanced significantly in recent years.",
+            "Graph databases model relationships between entities using nodes and edges.",
+            "Functional programming emphasizes immutability and pure functions.",
+            "The human genome contains approximately three billion base pairs.",
+            "Database systems store and retrieve data efficiently using indexing.",
+            "Python is a versatile language used for web development and data science.",
+            "JavaScript runs in web browsers and is essential for front-end development.",
+            "Deep learning has revolutionized computer vision and speech recognition.",
+            "Information retrieval systems rank documents by relevance to a query.",
+            "Distributed systems coordinate multiple computers to achieve a common goal.",
+            "Cryptographic hash functions map arbitrary data to fixed-size outputs.",
+            "Operating systems manage hardware resources and provide services to applications.",
+            "Compilers translate high-level programming languages into machine code.",
+            "Parallel computing divides a problem into subproblems solved simultaneously.",
+        ];
+
+        for (label, target_bytes) in [("10KB", 10_000), ("100KB", 100_000), ("1MB", 1_000_000)] {
+            eprintln!("  text_chunking/{label}...");
+            let mut text = String::with_capacity(target_bytes + 200);
+            let mut i = 0;
+            while text.len() < target_bytes {
+                text.push_str(base_sentences[i % base_sentences.len()]);
+                text.push(' ');
+                i += 1;
+            }
+
+            let times = bench_fn(
+                || {
+                    black_box(chunk_text(black_box(&text), 512, 50));
+                },
+                3,
+                50,
+            );
+            results.insert(
+                format!("text_chunking/{label}"),
+                BenchResult::from_times(&times),
+            );
+        }
+    }
+
+    // ── Sentence splitting ───────────────────────────────────────────
+    eprintln!("[8/15] Sentence splitting...");
+    {
+        use leann_core::chunking::sentence::split_sentences;
+
+        let base_sentences = [
+            "The quick brown fox jumps over the lazy dog.",
+            "Machine learning algorithms can identify patterns in large datasets.",
+            "Vector databases enable similarity search across high-dimensional spaces.",
+            "Rust provides memory safety without garbage collection.",
+            "Neural networks are inspired by the structure of the human brain.",
+            "Cloud computing offers scalable infrastructure for modern applications.",
+            "Natural language processing has advanced significantly in recent years.",
+            "Graph databases model relationships between entities using nodes and edges.",
+            "Functional programming emphasizes immutability and pure functions.",
+            "The human genome contains approximately three billion base pairs.",
+            "Database systems store and retrieve data efficiently using indexing.",
+            "Python is a versatile language used for web development and data science.",
+            "JavaScript runs in web browsers and is essential for front-end development.",
+            "Deep learning has revolutionized computer vision and speech recognition.",
+            "Information retrieval systems rank documents by relevance to a query.",
+            "Distributed systems coordinate multiple computers to achieve a common goal.",
+            "Cryptographic hash functions map arbitrary data to fixed-size outputs.",
+            "Operating systems manage hardware resources and provide services to applications.",
+            "Compilers translate high-level programming languages into machine code.",
+            "Parallel computing divides a problem into subproblems solved simultaneously.",
+        ];
+
+        for (label, target_bytes) in [("10KB", 10_000), ("100KB", 100_000), ("1MB", 1_000_000)] {
+            eprintln!("  sentence_split/{label}...");
+            let mut text = String::with_capacity(target_bytes + 200);
+            let mut i = 0;
+            while text.len() < target_bytes {
+                text.push_str(base_sentences[i % base_sentences.len()]);
+                text.push(' ');
+                i += 1;
+            }
+
+            let times = bench_fn(
+                || {
+                    black_box(split_sentences(black_box(&text)));
+                },
+                3,
+                50,
+            );
+            results.insert(
+                format!("sentence_split/{label}"),
+                BenchResult::from_times(&times),
+            );
+        }
+    }
+
+    // ── BM25 index build ─────────────────────────────────────────────
+    eprintln!("[9/15] BM25 fit...");
+    {
+        use leann_core::BM25Scorer;
+
+        let topics = [
+            "machine learning",
+            "database systems",
+            "web development",
+            "cloud computing",
+            "neural networks",
+            "programming languages",
+            "operating systems",
+            "computer vision",
+            "natural language",
+            "distributed systems",
+        ];
+
+        for n in [1_000, 10_000] {
+            eprintln!("  bm25_fit/{n}...");
+            let docs: Vec<(String, String)> = (0..n)
+                .map(|i| {
+                    (
+                        i.to_string(),
+                        format!(
+                            "Document {} about {}. The quick brown fox jumps over the lazy dog. \
+                             This document discusses various aspects of {} including theory and practice.",
+                            i, topics[i % topics.len()], topics[i % topics.len()]
+                        ),
+                    )
+                })
+                .collect();
+
+            let repeats = if n >= 10_000 { 10 } else { 30 };
+            let times = bench_fn(
+                || {
+                    let mut scorer = BM25Scorer::default();
+                    scorer.fit(black_box(&docs));
+                    black_box(&scorer);
+                },
+                2,
+                repeats,
+            );
+            results.insert(format!("bm25_fit/{n}"), BenchResult::from_times(&times));
+        }
+    }
+
+    // ── BM25 search ──────────────────────────────────────────────────
+    eprintln!("[10/15] BM25 search...");
+    {
+        use leann_core::BM25Scorer;
+
+        let topics = [
+            "machine learning",
+            "database systems",
+            "web development",
+            "cloud computing",
+            "neural networks",
+            "programming languages",
+            "operating systems",
+            "computer vision",
+            "natural language",
+            "distributed systems",
+        ];
+
+        for n in [1_000, 10_000] {
+            eprintln!("  bm25_search/{n}...");
+            let docs: Vec<(String, String)> = (0..n)
+                .map(|i| {
+                    (
+                        i.to_string(),
+                        format!(
+                            "Document {} about {}. The quick brown fox jumps over the lazy dog. \
+                             This document discusses various aspects of {} including theory and practice.",
+                            i, topics[i % topics.len()], topics[i % topics.len()]
+                        ),
+                    )
+                })
+                .collect();
+
+            let mut scorer = BM25Scorer::default();
+            scorer.fit(&docs);
+
+            let times = bench_fn(
+                || {
+                    black_box(scorer.search(black_box("machine learning neural networks"), 10));
+                },
+                50,
+                500,
+            );
+            results.insert(format!("bm25_search/{n}"), BenchResult::from_times(&times));
+        }
+    }
+
+    // ── Metadata filtering ───────────────────────────────────────────
+    eprintln!("[11/15] Metadata filtering...");
+    {
+        use leann_core::{FilterSpec, MetadataFilterEngine, MetadataFilters};
+
+        let genres = ["fiction", "science", "history", "biography", "drama"];
+        let topics = [
+            "topic_0", "topic_1", "topic_2", "topic_3", "topic_4", "topic_5", "topic_6", "topic_7",
+            "topic_8", "topic_9",
+        ];
+
+        for n in [1_000, 10_000] {
+            eprintln!("  metadata_filter/{n}...");
+            let result_set: Vec<std::collections::HashMap<String, serde_json::Value>> = (0..n)
+                .map(|i| {
+                    let mut m = std::collections::HashMap::new();
+                    m.insert("id".to_string(), serde_json::json!(format!("doc{i}")));
+                    m.insert(
+                        "score".to_string(),
+                        serde_json::json!(0.95 - (i as f64 * 0.0001)),
+                    );
+                    m.insert(
+                        "text".to_string(),
+                        serde_json::json!(format!("Text for document {i}")),
+                    );
+                    m.insert(
+                        "metadata".to_string(),
+                        serde_json::json!({
+                            "chapter": (i % 20) + 1,
+                            "genre": genres[i % genres.len()],
+                            "topic": topics[i % topics.len()],
+                            "word_count": 500 + (i * 37) % 5000,
+                            "is_published": i % 3 != 0,
+                        }),
+                    );
+                    m
+                })
+                .collect();
+
+            // Compound filter: chapter <= 5 AND genre in ["fiction", "science"]
+            let mut filters = MetadataFilters::new();
+            let mut chapter_spec = FilterSpec::new();
+            chapter_spec.insert("<=".to_string(), serde_json::json!(5));
+            filters.insert("chapter".to_string(), chapter_spec);
+            let mut genre_spec = FilterSpec::new();
+            genre_spec.insert("in".to_string(), serde_json::json!(["fiction", "science"]));
+            filters.insert("genre".to_string(), genre_spec);
+
+            let engine = MetadataFilterEngine::new();
+
+            let times = bench_fn(
+                || {
+                    black_box(engine.apply_filters(black_box(&result_set), black_box(&filters)));
+                },
+                10,
+                200,
+            );
+            results.insert(
+                format!("metadata_filter/{n}"),
+                BenchResult::from_times(&times),
+            );
+        }
+    }
+
+    // ── Index I/O (write) ────────────────────────────────────────────
+    eprintln!("[12/15] Index I/O (write)...");
+    {
+        for n in [1_000, 10_000] {
+            eprintln!("  index_io_write/{n}...");
+            let mut rng = StdRng::seed_from_u64(42);
+            let data = gen_vectors(&mut rng, n, 384);
+            let graph = build_hnsw_with_pool(&data, &config, &pool).unwrap();
+
+            let times = bench_fn(
+                || {
+                    let mut buf = Vec::new();
+                    write_hnsw_standard(&mut buf, &graph).unwrap();
+                    black_box(buf);
+                },
+                5,
+                50,
+            );
+            results.insert(
+                format!("index_io_write/{n}"),
+                BenchResult::from_times(&times),
+            );
+        }
+    }
+
+    // ── Index I/O (read) ─────────────────────────────────────────────
+    eprintln!("[13/15] Index I/O (read)...");
+    {
+        for n in [1_000, 10_000] {
+            eprintln!("  index_io_read/{n}...");
+            let mut rng = StdRng::seed_from_u64(42);
+            let data = gen_vectors(&mut rng, n, 384);
+            let graph = build_hnsw_with_pool(&data, &config, &pool).unwrap();
+
+            let mut buf = Vec::new();
+            write_hnsw_standard(&mut buf, &graph).unwrap();
+
+            let times = bench_fn(
+                || {
+                    let mut cursor = std::io::Cursor::new(&buf);
+                    let loaded = read_hnsw_index(&mut cursor).unwrap();
+                    black_box(loaded);
+                },
+                5,
+                50,
+            );
+            results.insert(
+                format!("index_io_read/{n}"),
+                BenchResult::from_times(&times),
+            );
+        }
+    }
+
+    // ── Passage file write ───────────────────────────────────────────
+    eprintln!("[14/15] Passage write...");
+    {
+        use leann_core::passages::{Passage, write_passages};
+
+        for n in [1_000usize, 10_000] {
+            eprintln!("  passage_write/{n}...");
+            let passages: Vec<Passage> = (0..n)
+                .map(|i| {
+                    let mut metadata = std::collections::HashMap::new();
+                    metadata.insert("doc_num".to_string(), serde_json::json!(i));
+                    metadata.insert(
+                        "topic".to_string(),
+                        serde_json::json!(format!("topic_{}", i % 10)),
+                    );
+                    Passage {
+                        id: i.to_string(),
+                        text: format!(
+                            "This is document number {} about topic {}. It contains some text \
+                             that is representative of a typical passage in a RAG system.",
+                            i,
+                            i % 10
+                        ),
+                        metadata,
+                    }
+                })
+                .collect();
+
+            let dir = tempfile::tempdir().unwrap();
+
+            let times = bench_fn(
+                || {
+                    let p_path = dir.path().join("bench.passages.jsonl");
+                    let o_path = dir.path().join("bench.passages.idx");
+                    write_passages(&passages, &p_path, &o_path).unwrap();
+                },
+                2,
+                30,
+            );
+            results.insert(
+                format!("passage_write/{n}"),
+                BenchResult::from_times(&times),
+            );
+        }
+    }
+
+    // ── CLI startup time ─────────────────────────────────────────────
+    eprintln!("[15/15] CLI startup time...");
+    {
+        // Find the Rust CLI binary (release build).
+        // cargo bench runs with cwd = crate dir, so walk up to find the workspace target/.
+        let rust_bin = std::env::current_dir()
+            .unwrap()
+            .ancestors()
+            .map(|p| p.join("target/release/leann"))
+            .find(|p| p.exists())
+            .unwrap_or_else(|| {
+                std::env::current_dir()
+                    .unwrap()
+                    .join("target/release/leann")
+            });
+        if rust_bin.exists() {
+            eprintln!("  Measuring Rust CLI startup ({})...", rust_bin.display());
+            let mut times = Vec::with_capacity(20);
+            // Warmup
+            for _ in 0..3 {
+                let _ = std::process::Command::new(&rust_bin)
+                    .arg("--help")
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
+            }
+            for _ in 0..20 {
+                let start = Instant::now();
+                let _ = std::process::Command::new(&rust_bin)
+                    .arg("--help")
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
+                times.push(start.elapsed().as_secs_f64());
+            }
+            times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            results.insert("cli_startup".to_string(), BenchResult::from_times(&times));
+        } else {
+            eprintln!(
+                "  SKIP: Rust CLI binary not found at {}. Run `cargo build --release -p leann-cli` first.",
+                rust_bin.display()
             );
         }
     }

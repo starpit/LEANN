@@ -194,21 +194,27 @@ pub fn write_passages(
     passages_path: &Path,
     offset_path: &Path,
 ) -> Result<Vec<u64>> {
-    let mut file = File::create(passages_path)?;
+    let file = File::create(passages_path)?;
+    let mut writer = std::io::BufWriter::new(file);
     let mut offsets = Vec::with_capacity(chunks.len());
+    let mut pos: u64 = 0;
 
     for chunk in chunks {
-        let offset = file.stream_position()?;
-        serde_json::to_writer(&mut file, chunk)?;
-        file.write_all(b"\n")?;
-        offsets.push(offset);
+        offsets.push(pos);
+        let bytes = serde_json::to_vec(chunk)?;
+        writer.write_all(&bytes)?;
+        writer.write_all(b"\n")?;
+        pos += bytes.len() as u64 + 1;
     }
+    writer.flush()?;
 
     // Write offsets as one u64 per line
-    let mut offset_file = File::create(offset_path)?;
+    let offset_file = File::create(offset_path)?;
+    let mut offset_writer = std::io::BufWriter::new(offset_file);
     for &o in &offsets {
-        writeln!(offset_file, "{}", o)?;
+        writeln!(offset_writer, "{}", o)?;
     }
+    offset_writer.flush()?;
 
     Ok(offsets)
 }
