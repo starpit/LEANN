@@ -2,9 +2,9 @@
 
 > **Rust port currently based on Python commit [`1da64a9`](https://github.com/nickmccarty/LEANN/commit/1da64a9) (`main` as of 2026-02-20).** When updating the Rust code to match future Python changes, diff from this commit forward.
 
-## Current Status (2026-02-22)
+## Current Status (2026-02-23)
 
-**~12,100 lines of Rust across 4 crates. 211 Rust tests passing (110 unit + 85 integration + 16 CLI/server) + 23 Python binding tests. 0 errors, 0 warnings.**
+**~12,500 lines of Rust across 4 crates. 211 Rust tests passing (110 unit + 85 integration + 16 CLI/server) + 34 Python binding tests. 0 errors, 0 warnings.**
 
 All 8 phases of the initial implementation are complete. Since then, major HNSW performance work has been done: SIMD-optimized distance functions (NEON/AVX2), batch-4 distance computation, parallel build with rayon thread pools, flat heaps for cache locality, early termination, prefetching in hot paths, `SearchBuffers` for heap/visited-list reuse, and a `VisitedList` with generation-counter reset. The pure-Rust HNSW engine now matches or approaches FAISS C++ performance. Criterion benchmark suite and Rust-vs-Python comparison scripts validate this.
 
@@ -16,10 +16,10 @@ What remains is hardening: ONNX Runtime activation, Python example porting, and 
 
 | Crate | LOC | Status |
 |-------|-----|--------|
-| `leann-core` | 9,920 | Complete - all modules implemented with 110 unit tests; extensive HNSW optimization; modular feature flags |
+| `leann-core` | 10,159 | Complete - all modules implemented with 110 unit tests; extensive HNSW optimization; modular feature flags |
 | `leann-cli` | 1,405 | Complete - all 8 commands wired up, aligned with Python CLI |
 | `leann-server` | 223 | Complete - all endpoints functional with state management |
-| `leann-python` | 534 | Complete - PyO3 0.25, maturin build tested, 23 Python tests, `.pyi` stubs, search kwargs wired |
+| `leann-python` | 736 | Complete - PyO3 0.25, maturin build tested, 34 Python tests, `.pyi` stubs, search kwargs wired |
 
 ### File Inventory
 
@@ -38,9 +38,9 @@ leann-rs/
       metadata_filter.rs       (714)  # 13 operators, AND logic [29 tests]
       passages.rs              (634)  # PassageManager, JSONL I/O, Vec<u64> offset map [9 tests]
       bm25.rs                  (392)  # BM25Scorer [14 tests]
-      builder.rs               (380)  # LeannBuilder (build + from_embeddings)
-      searcher.rs              (390)  # LeannSearcher (vector/BM25/grep/hybrid search)
-      chat.rs                  (330)  # LlmProvider trait + Ollama/OpenAI/Anthropic/Gemini/Simulated
+      builder.rs               (517)  # LeannBuilder (build + from_embeddings)
+      searcher.rs              (443)  # LeannSearcher (vector/BM25/grep/hybrid search)
+      chat.rs                  (362)  # LlmProvider trait + Ollama/OpenAI/Anthropic/Gemini/Simulated
       react_agent.rs           (335)  # ReAct agent [11 tests]
       sync.rs                  (279)  # MerkleTree + FileSynchronizer [2 tests]
       hnsw/
@@ -53,7 +53,7 @@ leann-rs/
         io.rs                  (404)  # Binary format read/write (compact + standard) [1 test]
       embedding/
         mod.rs                  (60)  # EmbeddingProvider trait, EmbeddingMode enum
-        client.rs              (161)  # ZMQ REQ client (text/distance/by-id)
+        client.rs              (178)  # ZMQ REQ client (text/distance/by-id)
         server.rs              (213)  # ZMQ REP server (3 request types)
         manager.rs             (212)  # Subprocess lifecycle, port allocation
         openai.rs              (131)  # OpenAI embedding API
@@ -74,11 +74,11 @@ leann-rs/
     leann-python/
       Cargo.toml                      # Standalone (excluded from workspace, built via maturin)
       pyproject.toml                  # maturin config
-      src/lib.rs               (534)  # PyO3: LeannBuilder/Searcher/Chat/ReActAgent/SearchResult + search kwargs + error mapping
+      src/lib.rs               (736)  # PyO3: LeannBuilder/Searcher/Chat/ReActAgent/SearchResult + search kwargs + error mapping
       python/leann/__init__.py        # Re-exports
       python/leann/__init__.pyi       # Package-level type stubs
       python/leann/leann.pyi          # Native module type stubs
-      tests/test_bindings.py          # 23 Python tests (import, constructor, build+search)
+      tests/test_bindings.py          # 34 Python tests (import, constructor, build+search, API compliance)
       tests/test_maturin.rs           # Rust integration test: maturin develop + pytest
 ```
 
@@ -346,12 +346,12 @@ PyO3 0.25 used for leann-python (standalone crate, Python 3.14 compatible).
 - `python/leann/__init__.pyi` + `python/leann/leann.pyi` — type stubs for IDE support
 
 ### Testing:
-- `tests/test_bindings.py` — 23 pytest tests (import, constructor, error handling, build+search integration)
+- `tests/test_bindings.py` — 34 pytest tests (import, constructor, error handling, build+search integration, API compliance)
 - `tests/test_maturin.rs` — Rust integration test that runs `maturin develop` + `pytest`
 - Run: `cd crates/leann-python && cargo test --test test_maturin`
 
 ### Done:
-- [x] Maturin end-to-end build test (`.pyi` type stubs for IDE support, `tests/test_bindings.py` test suite, `build_index_from_embeddings` PyO3 method for network-free testing)
+- [x] Maturin end-to-end build test (`.pyi` type stubs for IDE support, `tests/test_bindings.py` test suite with 34 tests, `build_index_from_embeddings` PyO3 method for network-free testing)
 
 ---
 
@@ -434,7 +434,7 @@ pub fn build_test_index(n_docs: usize, dir: &Path) -> (PathBuf, Vec<String>)
 
 ---
 
-### E2E-2: Full RAG Pipeline — Build → Search → Chat (`test_readme_pipeline.rs`)
+### E2E-2: Full RAG Pipeline — Build → Search → Chat (`test_chat_pipeline.rs`)
 **Python source:** `test_readme_examples.py::test_readme_basic_example`, `test_readme_examples.py::test_llm_config_simulated`
 
 | Test | What it verifies |
@@ -564,7 +564,7 @@ Implemented in `test_python_compat.rs` (11 tests) — cross-implementation forma
 
 ---
 
-### E2E-9: CLI Integration Tests (`test_cli_build_search.rs`, `test_cli_args.rs`, `test_cli_list_remove.rs`)
+### E2E-9: CLI Integration Tests (`test_cli_args.rs`, `test_cli_list_remove.rs`)
 **Python source:** `test_ci_minimal.py`, `test_cli_ask.py`, `test_cli_verbosity.py`, `test_document_rag.py`
 
 Tests run the `leann` binary as a subprocess via `std::process::Command`.
@@ -611,7 +611,7 @@ Uses `axum::test` helpers or spawns server on a random port.
 | Category | Runs in CI | Needs network | Actual count |
 |----------|-----------|---------------|--------------|
 | Unit tests (leann-core src/) | Yes | No | 110 |
-| Integration tests (leann-core tests/) | Yes | No | 74 |
+| Integration tests (leann-core tests/) | Yes | No | 85 |
 | CLI subprocess tests (leann-cli) | Yes | No | 12 |
 | HTTP server tests (leann-server) | Yes | No | 4 |
 | OpenAI embedding | No (`#[ignore]`) | Yes | 0 (planned) |
@@ -663,7 +663,7 @@ Uses `axum::test` helpers or spawns server on a random port.
 2. **CLI conformance**: Rust CLI options aligned with Python CLI (2026-02-19) — verified via `--help` output comparison
 3. **Integration tests**: 85 passing across 9 test files in leann-core. Coverage: core build/search pipeline (11 tests), metadata filtering with all 13 operators via BM25+filter e2e (16 tests), BM25/grep search via LeannSearcher (8 tests), document loading + AST chunking (17 tests), cross-implementation format compatibility (11 tests), file sync/Merkle tree (9 tests), chat/LLM pipeline (5 tests), embedding server manager lifecycle (5 tests), index file format validation (3 tests). All use FakeEmbeddingProvider for deterministic, network-free execution.
 4. **CLI/server tests**: 16 passing — CLI subprocess/help tests (7 in leann-cli), CLI list/remove lifecycle (5 in leann-cli), HTTP server endpoints (4 in leann-server).
-5. **Python binding tests**: `tests/test_bindings.py` — import/introspection tests, constructor tests, error handling, integration tests (build_index_from_embeddings roundtrip)
+5. **Python binding tests**: `tests/test_bindings.py` — 34 pytest tests: import/introspection, constructor, error handling, integration (build_index_from_embeddings roundtrip), API compliance
 6. **Benchmark**: Criterion benchmark suite implemented (`cargo bench --package leann-core`) with 5 groups: distance computation (SIMD at 128/384/768 dims), HNSW build (100/1K/10K/50K), HNSW search (ef 16-256), HNSW search recompute (ef 16-256), full pipeline (build+write+read+search). JSON output binary with quantile tracking and RNG seed support for scripted comparison. Python FAISS comparison suite at `benchmarks/` with orchestration script (`benchmarks/compare_rust_python.sh`). See Benchmark Results below for detailed numbers.
 7. **Format compatibility**: 11 tests in `test_python_compat.rs` verify on-disk format matches Python expectations. `.meta.json`, `.passages.jsonl`, `.index` (FAISS binary), `.ids.txt` are all compatible. `.passages.idx` is incompatible (Rust text offsets vs Python pickle dict). See [RUST_API_COMPLIANCE.md](RUST_API_COMPLIANCE.md).
 8. **Cross-platform**: Not yet set up — CI for Linux (x86_64), macOS (ARM64), Windows
