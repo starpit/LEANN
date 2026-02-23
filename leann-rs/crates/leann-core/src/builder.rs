@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use tracing::info;
 
-use crate::embedding::EmbeddingProvider;
+use crate::embedding::{EmbeddingMode, EmbeddingProvider};
 use crate::hnsw::build::build_hnsw_with_threads;
 use crate::hnsw::csr::convert_to_csr;
 use crate::hnsw::graph::{HnswConfig, VectorStorage};
@@ -446,5 +446,72 @@ impl LeannBuilder {
 
         meta.save(&paths.meta_path())?;
         Ok(())
+    }
+
+    /// Create an embedding provider based on the builder's `embedding_mode` and `embedding_model`.
+    ///
+    /// Dispatches to:
+    /// - `"ollama"` → `OllamaEmbedding`
+    /// - `"openai"` → `OpenAiEmbedding`
+    /// - `"gemini"` → `GeminiEmbedding`
+    /// - `"sentence-transformers"` (default) → ZMQ `EmbeddingClient`
+    pub fn create_embedding_provider(&self) -> Result<Box<dyn EmbeddingProvider>> {
+        let mode = EmbeddingMode::from_str_lossy(&self.embedding_mode);
+        match mode {
+            #[cfg(feature = "embedding-remote")]
+            EmbeddingMode::Ollama => {
+                let host = self
+                    .embedding_options
+                    .get("host")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                Ok(Box::new(crate::embedding::ollama::OllamaEmbedding::new(
+                    &self.embedding_model,
+                    host.as_deref(),
+                )))
+            }
+            #[cfg(feature = "embedding-remote")]
+            EmbeddingMode::OpenAI => {
+                let api_key = self
+                    .embedding_options
+                    .get("api_key")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                let base_url = self
+                    .embedding_options
+                    .get("base_url")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                Ok(Box::new(crate::embedding::openai::OpenAiEmbedding::new(
+                    &self.embedding_model,
+                    api_key.as_deref(),
+                    base_url.as_deref(),
+                    self.dimensions,
+                )?))
+            }
+            #[cfg(feature = "embedding-remote")]
+            EmbeddingMode::Gemini => Ok(Box::new(crate::embedding::gemini::GeminiEmbedding::new(
+                &self.embedding_model,
+                self.embedding_options
+                    .get("api_key")
+                    .and_then(|v| v.as_str()),
+            )?)),
+            #[cfg(feature = "embedding-zmq")]
+            EmbeddingMode::SentenceTransformers => {
+                let port = self
+                    .embedding_options
+                    .get("zmq_port")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(5557) as u16;
+                Ok(Box::new(crate::embedding::client::EmbeddingClient::new(
+                    port,
+                )))
+            }
+            #[allow(unreachable_patterns)]
+            _ => anyhow::bail!(
+                "Embedding mode '{}' is not available (missing feature flag or unsupported mode)",
+                self.embedding_mode
+            ),
+        }
     }
 }

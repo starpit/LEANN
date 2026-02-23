@@ -354,3 +354,9 @@ impl LeannChat {
         self.searcher.cleanup();
     }
 }
+
+impl Drop for LeannChat {
+    fn drop(&mut self) {
+        self.cleanup();
+    }
+}

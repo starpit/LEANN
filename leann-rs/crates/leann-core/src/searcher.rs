@@ -415,6 +415,8 @@ pub struct SearchConfig {
     pub zmq_port: Option<u16>,
     /// Pruning strategy: "global", "local", or "proportional".
     pub pruning_strategy: Option<String>,
+    /// Provider options (e.g. prompt_template overrides) passed at query time.
+    pub provider_options: Option<HashMap<String, serde_json::Value>>,
 }
 
 impl Default for SearchConfig {
@@ -429,6 +431,7 @@ impl Default for SearchConfig {
             gemma: 1.0,
             zmq_port: None,
             pruning_strategy: None,
+            provider_options: None,
         }
     }
 }

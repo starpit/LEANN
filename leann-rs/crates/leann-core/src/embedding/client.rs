@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use ndarray::Array2;
 
+use super::EmbeddingProvider;
+
 /// ZMQ client for communicating with the embedding server.
 ///
 /// Supports three request types matching the Python msgpack protocol:
@@ -157,5 +159,20 @@ impl EmbeddingClient {
         }
 
         Array2::from_shape_vec((n, d), flat_data.clone()).context("reshaping embeddings")
+    }
+}
+
+impl EmbeddingProvider for EmbeddingClient {
+    fn compute_embeddings(&self, chunks: &[String]) -> Result<Array2<f32>> {
+        self.compute_text_embeddings(chunks)
+    }
+
+    fn dimensions(&self) -> usize {
+        // Dimensions are detected by the builder via a probe call.
+        0
+    }
+
+    fn name(&self) -> &str {
+        "zmq"
     }
 }

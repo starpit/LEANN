@@ -140,6 +140,7 @@ fn extract_llm_params(kw: Option<&Bound<'_, PyDict>>) -> leann_core::chat::LlmPa
         "zmq_port",
         "pruning_strategy",
         "metadata_filters",
+        "provider_options",
     ];
     for (key, value) in kw.iter() {
         if let Ok(key_str) = key.extract::<String>() {
@@ -183,6 +184,13 @@ fn extract_search_config(kw: Option<&Bound<'_, PyDict>>) -> SearchConfig {
     }
     if let Some(v) = extract_kwarg::<String>(kw, &["pruning_strategy"]) {
         config.pruning_strategy = Some(v);
+    }
+
+    // Extract provider_options: dict[str, Any]
+    if let Ok(Some(po_obj)) = kw.get_item("provider_options")
+        && let Ok(po_dict) = po_obj.downcast::<PyDict>()
+    {
+        config.provider_options = Some(py_dict_to_metadata(po_dict));
     }
 
     // Extract metadata_filters: dict[str, dict[str, Any]]
@@ -329,13 +337,15 @@ impl LeannBuilder {
         self.inner.add_text(text, meta);
     }
 
-    /// Build the index at the given path (requires an Ollama embedding server).
+    /// Build the index at the given path.
+    ///
+    /// Uses the builder's `embedding_mode` and `embedding_model` to select
+    /// the embedding provider (ollama, openai, gemini, or sentence-transformers/zmq).
     fn build_index(&mut self, py: Python<'_>, index_path: &str) -> PyResult<()> {
         py.allow_threads(|| {
-            let provider =
-                leann_core::embedding::ollama::OllamaEmbedding::new("nomic-embed-text", None);
+            let provider = self.inner.create_embedding_provider().map_err(anyhow_to_pyerr)?;
             self.inner
-                .build_index(&PathBuf::from(index_path), &provider)
+                .build_index(&PathBuf::from(index_path), provider.as_ref())
                 .map_err(anyhow_to_pyerr)
         })
     }
@@ -550,6 +560,41 @@ impl LeannChat {
         })
     }
 
+    /// Start an interactive REPL loop, reading questions from stdin.
+    #[pyo3(signature = (top_k=5))]
+    fn start_interactive(&self, py: Python<'_>, top_k: usize) -> PyResult<()> {
+        use std::io::{BufRead, Write};
+
+        println!("LEANN interactive mode (type 'quit' or 'exit' to stop)");
+        loop {
+            print!("\nQuestion: ");
+            std::io::stdout().flush().unwrap();
+
+            let mut line = String::new();
+            let bytes = std::io::stdin().lock().read_line(&mut line).map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!("stdin read error: {e}"))
+            })?;
+            if bytes == 0 {
+                break; // EOF
+            }
+
+            let question = line.trim();
+            if question.is_empty() {
+                continue;
+            }
+            if question == "quit" || question == "exit" {
+                break;
+            }
+
+            let q = question.to_string();
+            match py.allow_threads(|| self.inner.ask(&q, top_k)) {
+                Ok(answer) => println!("\n{answer}"),
+                Err(e) => println!("\nError: {e}"),
+            }
+        }
+        Ok(())
+    }
+
     fn cleanup(&mut self) {
         self.inner.cleanup();
     }
@@ -681,5 +726,11 @@ fn leann(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ReActAgent>()?;
     m.add_function(wrap_pyfunction!(get_registered_backends, m)?)?;
     m.add_function(wrap_pyfunction!(create_react_agent, m)?)?;
+
+    // Expose BACKEND_REGISTRY dict matching Python's module-level export.
+    let registry = PyDict::new(m.py());
+    registry.set_item("hnsw", "hnsw")?;
+    m.add("BACKEND_REGISTRY", registry)?;
+
     Ok(())
 }
