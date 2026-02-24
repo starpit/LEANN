@@ -335,7 +335,7 @@ fn test_filter_range() {
     for r in &results {
         let num = r.metadata.get("doc_num").and_then(|v| v.as_i64()).unwrap();
         assert!(
-            num >= 10 && num < 20,
+            (10..20).contains(&num),
             "doc_num should be in [10, 20), got {}",
             num
         );

@@ -31,7 +31,6 @@ pub fn chunk_code_tree_sitter(
     let tree = parser.parse(source, None)?;
     let root = tree.root_node();
 
-    let source_bytes = source.as_bytes();
     let mut chunks = Vec::new();
     let mut covered_end: usize = 0;
 
@@ -39,7 +38,6 @@ pub fn chunk_code_tree_sitter(
         root,
         &config,
         source,
-        source_bytes,
         filename,
         max_chunk_size,
         &mut chunks,
@@ -47,7 +45,7 @@ pub fn chunk_code_tree_sitter(
     );
 
     // Capture any trailing module-level code after the last definition.
-    if covered_end < source_bytes.len() {
+    if covered_end < source.len() {
         let gap_text = &source[covered_end..];
         if !gap_text.trim().is_empty() {
             push_block_chunks(
@@ -73,12 +71,12 @@ fn collect_definitions(
     node: Node<'_>,
     config: &LanguageConfig,
     source: &str,
-    source_bytes: &[u8],
     filename: &str,
     max_chunk_size: usize,
     chunks: &mut Vec<CodeChunk>,
     covered_end: &mut usize,
 ) {
+    let source_bytes = source.as_bytes();
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         let kind = child.kind();
@@ -91,7 +89,6 @@ fn collect_definitions(
                     child,
                     config,
                     source,
-                    source_bytes,
                     filename,
                     max_chunk_size,
                     chunks,
@@ -147,7 +144,6 @@ fn collect_definitions(
                     child,
                     config,
                     source,
-                    source_bytes,
                     filename,
                     max_chunk_size,
                     &mut sub_chunks,
@@ -250,10 +246,10 @@ fn node_kind_to_chunk_type(kind: &str) -> &'static str {
 /// Try to extract the name identifier from a definition node.
 fn extract_definition_name(node: Node<'_>, source: &[u8]) -> Option<String> {
     // For decorated_definition, look at the inner definition's name.
-    if node.kind() == "decorated_definition" {
-        if let Some(def) = node.child_by_field_name("definition") {
-            return extract_definition_name(def, source);
-        }
+    if node.kind() == "decorated_definition"
+        && let Some(def) = node.child_by_field_name("definition")
+    {
+        return extract_definition_name(def, source);
     }
 
     // Most definition nodes have a "name" field.

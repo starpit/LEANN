@@ -44,10 +44,9 @@ pub fn chunk_code(source: &str, filename: &str, max_chunk_size: usize) -> Vec<Co
     ))]
     if let Some(chunks) =
         super::tree_sitter::chunk_code_tree_sitter(source, filename, max_chunk_size)
+        && !chunks.is_empty()
     {
-        if !chunks.is_empty() {
-            return chunks;
-        }
+        return chunks;
     }
 
     // Heuristic fallback
