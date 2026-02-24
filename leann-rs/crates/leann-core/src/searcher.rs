@@ -2,18 +2,17 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::Path;
+use std::sync::Arc;
 
-#[cfg(feature = "embedding-zmq")]
 use tracing::warn;
 
 #[cfg(feature = "bm25")]
 use crate::bm25::BM25Scorer;
-#[cfg(feature = "embedding-zmq")]
-use crate::embedding::client::EmbeddingClient;
+use crate::embedding::EmbeddingProvider;
 use crate::hnsw::graph::HnswGraph;
 use crate::hnsw::io::read_hnsw_index;
-#[cfg(feature = "embedding-zmq")]
-use crate::hnsw::search::{PruningStrategy, SearchParams, search_hnsw_recompute};
+use crate::hnsw::search::{PruningStrategy, SearchParams, search_hnsw, search_hnsw_recompute};
+use crate::hnsw::simd::{inner_product_distance, l2_distance};
 use crate::index::{DistanceMetric, IndexMeta, IndexPaths};
 #[cfg(feature = "bm25")]
 use crate::passages::Passage;
@@ -25,7 +24,7 @@ use crate::search_result::SearchResult;
 pub struct SearcherOptions {
     /// Override `recompute_embeddings` from meta.json. `None` = use meta default.
     pub recompute_embeddings: Option<bool>,
-    /// If true, send a dummy embedding request at construction to verify the ZMQ server.
+    /// If true, send a probe embedding request at construction to verify the provider.
     pub enable_warmup: bool,
 }
 
@@ -38,6 +37,7 @@ pub struct LeannSearcher {
     id_map: Vec<String>,
     distance_metric: DistanceMetric,
     recompute_embeddings: bool,
+    provider: Option<Arc<dyn EmbeddingProvider>>,
     #[cfg(feature = "bm25")]
     bm25: Option<BM25Scorer>,
     meta_path: std::path::PathBuf,
@@ -83,6 +83,9 @@ impl LeannSearcher {
             Vec::new()
         };
 
+        // Construct embedding provider from meta
+        let provider = Self::create_provider_from_meta(&meta);
+
         Ok(Self {
             meta,
             passages,
@@ -90,6 +93,7 @@ impl LeannSearcher {
             id_map,
             distance_metric,
             recompute_embeddings: recompute,
+            provider,
             #[cfg(feature = "bm25")]
             bm25: None,
             meta_path,
@@ -99,7 +103,7 @@ impl LeannSearcher {
     /// Open an existing LEANN index with custom options.
     ///
     /// This allows overriding `recompute_embeddings` from meta.json and
-    /// optionally warming up the ZMQ embedding server at construction time.
+    /// optionally warming up the embedding provider at construction time.
     pub fn open_with_options(index_path: &Path, options: &SearcherOptions) -> Result<Self> {
         let mut searcher = Self::open(index_path)?;
 
@@ -108,19 +112,48 @@ impl LeannSearcher {
             searcher.recompute_embeddings = recompute;
         }
 
-        // Warmup: send a dummy embedding request to verify the ZMQ server responds
-        #[cfg(feature = "embedding-zmq")]
+        // Warmup: send a probe embedding request to verify the provider responds
         if options.enable_warmup {
-            let client = EmbeddingClient::new(5557);
-            match client.compute_text_embeddings(&["warmup".to_string()]) {
-                Ok(_) => {}
-                Err(e) => {
-                    warn!("Warmup embedding request failed (server may not be running): {e}");
-                }
-            }
+            searcher.warmup()?;
         }
 
         Ok(searcher)
+    }
+
+    /// Send a probe embedding request to verify the provider is reachable.
+    ///
+    /// This is useful for detecting misconfiguration early (e.g. Ollama not running)
+    /// rather than waiting until the first search call.
+    pub fn warmup(&self) -> Result<()> {
+        if let Some(ref provider) = self.provider {
+            match provider.compute_embeddings(&["__LEANN_WARMUP__".to_string()]) {
+                Ok(_) => {}
+                Err(e) => {
+                    warn!("Warmup embedding request failed (provider may not be running): {e}");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Construct an embedding provider from index metadata.
+    #[cfg(feature = "embedding-remote")]
+    fn create_provider_from_meta(meta: &IndexMeta) -> Option<Arc<dyn EmbeddingProvider>> {
+        use crate::embedding::{EmbeddingMode, create_embedding_provider};
+
+        let mode = EmbeddingMode::from_str_lossy(&meta.embedding_mode);
+        match create_embedding_provider(&mode, &meta.embedding_model, &meta.embedding_options) {
+            Ok(provider) => Some(Arc::from(provider)),
+            Err(e) => {
+                warn!("Could not create embedding provider from meta: {e}");
+                None
+            }
+        }
+    }
+
+    #[cfg(not(feature = "embedding-remote"))]
+    fn create_provider_from_meta(_meta: &IndexMeta) -> Option<Arc<dyn EmbeddingProvider>> {
+        None
     }
 
     /// Search for nearest neighbors.
@@ -160,32 +193,26 @@ impl LeannSearcher {
             return Ok(results);
         }
 
-        // Vector search requires an embedding client
-        #[cfg(feature = "embedding-zmq")]
-        {
-            let results = self.vector_search(query, top_k, config)?;
-            Ok(results)
-        }
-        #[cfg(not(feature = "embedding-zmq"))]
-        {
-            let _ = (query, top_k, config);
-            anyhow::bail!("Vector search requires the `embedding-zmq` feature");
-        }
+        // Vector search requires an embedding provider
+        let results = self.vector_search(query, top_k, config)?;
+        Ok(results)
     }
 
-    #[cfg(feature = "embedding-zmq")]
     fn vector_search(
         &self,
         query: &str,
         top_k: usize,
         config: &SearchConfig,
     ) -> Result<Vec<SearchResult>> {
-        // For now, we need the embedding server to compute query embeddings
-        let zmq_port = config.zmq_port.unwrap_or(5557);
-        let client = EmbeddingClient::new(zmq_port);
+        let provider = self.provider.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "No embedding provider available. Ensure the index was built with a supported \
+                 embedding mode (ollama, openai, gemini) and the `embedding-remote` feature is enabled."
+            )
+        })?;
 
         // Compute query embedding
-        let query_embedding = client.compute_text_embeddings(&[query.to_string()])?;
+        let query_embedding = provider.compute_embeddings(&[query.to_string()])?;
         let query_vec: Vec<f32> = query_embedding.row(0).to_vec();
 
         // Normalize for cosine
@@ -215,7 +242,6 @@ impl LeannSearcher {
             beam_size: config.beam_width,
             prune_ratio: config.prune_ratio,
             recompute_embeddings: self.recompute_embeddings,
-            zmq_port: Some(zmq_port),
             batch_size: config.batch_size,
             pruning_strategy,
             ..Default::default()
@@ -223,35 +249,109 @@ impl LeannSearcher {
 
         // Search
         let (labels, distances) = if self.recompute_embeddings {
-            let client = EmbeddingClient::new(zmq_port);
+            // Recompute: look up passage texts, compute embeddings, compute distances locally
+            let provider = Arc::clone(provider);
+            let passages = &self.passages;
+            let distance_metric = self.distance_metric;
+
             search_hnsw_recompute(
                 &self.graph,
                 &query_vec,
                 top_k,
                 &params,
                 |node_ids, q, out| {
-                    let dists = client
-                        .compute_distances(node_ids, q)
-                        .unwrap_or_else(|_| vec![1e9; node_ids.len()]);
-                    out[..dists.len()].copy_from_slice(&dists);
+                    // Look up texts for each node ID
+                    let mut texts = Vec::new();
+                    let mut found_indices = Vec::new();
+
+                    for (idx, &nid) in node_ids.iter().enumerate() {
+                        if let Ok(passage) = passages.get_passage_by_index(nid)
+                            && !passage.text.is_empty()
+                        {
+                            texts.push(passage.text);
+                            found_indices.push(idx);
+                        }
+                    }
+
+                    // Default to large distance for unfound passages
+                    for d in out.iter_mut().take(node_ids.len()) {
+                        *d = 1e9;
+                    }
+
+                    if texts.is_empty() {
+                        return;
+                    }
+
+                    if let Ok(embeddings) = provider.compute_embeddings(&texts) {
+                        for (i, &original_idx) in found_indices.iter().enumerate() {
+                            let emb = embeddings.row(i);
+                            let emb_slice = emb.as_slice().unwrap();
+                            let dist = match distance_metric {
+                                DistanceMetric::L2 => l2_distance(q, emb_slice),
+                                _ => inner_product_distance(q, emb_slice),
+                            };
+                            out[original_idx] = dist;
+                        }
+                    }
                 },
             )
         } else {
-            // Non-recompute: we'd need stored vectors
-            // For now, fall back to recompute
-            let client = EmbeddingClient::new(zmq_port);
-            search_hnsw_recompute(
-                &self.graph,
-                &query_vec,
-                top_k,
-                &params,
-                |node_ids, q, out| {
-                    let dists = client
-                        .compute_distances(node_ids, q)
-                        .unwrap_or_else(|_| vec![1e9; node_ids.len()]);
-                    out[..dists.len()].copy_from_slice(&dists);
-                },
-            )
+            // Non-recompute: use stored vectors
+            match &self.graph.vector_storage {
+                crate::hnsw::graph::VectorStorage::Raw { data, .. } => {
+                    let flat_vectors: Vec<f32> = data
+                        .chunks_exact(4)
+                        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                        .collect();
+                    search_hnsw(&self.graph, &query_vec, top_k, &flat_vectors, &params)
+                }
+                _ => {
+                    // No stored vectors — fall back to recompute via provider
+                    let provider = Arc::clone(provider);
+                    let passages = &self.passages;
+                    let distance_metric = self.distance_metric;
+
+                    search_hnsw_recompute(
+                        &self.graph,
+                        &query_vec,
+                        top_k,
+                        &params,
+                        |node_ids, q, out| {
+                            let mut texts = Vec::new();
+                            let mut found_indices = Vec::new();
+
+                            for (idx, &nid) in node_ids.iter().enumerate() {
+                                if let Ok(passage) = passages.get_passage_by_index(nid)
+                                    && !passage.text.is_empty()
+                                {
+                                    texts.push(passage.text);
+                                    found_indices.push(idx);
+                                }
+                            }
+
+                            for d in out.iter_mut().take(node_ids.len()) {
+                                *d = 1e9;
+                            }
+
+                            if texts.is_empty() {
+                                return;
+                            }
+
+                            if let Ok(embeddings) = provider.compute_embeddings(&texts) {
+                                for (i, &original_idx) in found_indices.iter().enumerate() {
+                                    let emb = embeddings.row(i);
+                                    let emb_slice = emb.as_slice().unwrap();
+                                    let dist = match distance_metric {
+                                        DistanceMetric::L2 => l2_distance(q, emb_slice),
+                                        _ => inner_product_distance(q, emb_slice),
+                                    };
+                                    out[original_idx] = dist;
+                                }
+                            }
+                        },
+                    )
+                }
+            }
         };
 
         // Map labels to passages and enrich results
@@ -328,7 +428,6 @@ impl LeannSearcher {
         Ok(results)
     }
 
-    #[cfg(feature = "embedding-zmq")]
     fn map_label(&self, label: usize) -> String {
         if !self.id_map.is_empty() && label < self.id_map.len() {
             self.id_map[label].clone()
@@ -406,7 +505,7 @@ impl LeannSearcher {
     }
 
     pub fn cleanup(&mut self) {
-        // Cleanup embedding server resources
+        // Cleanup resources (provider is Arc-dropped automatically)
     }
 }
 
@@ -421,7 +520,6 @@ pub struct SearchConfig {
     pub use_grep: bool,
     /// Weight of vector search (0.0 = pure BM25, 1.0 = pure vector).
     pub gemma: f64,
-    pub zmq_port: Option<u16>,
     /// Pruning strategy: "global", "local", or "proportional".
     pub pruning_strategy: Option<String>,
     /// Provider options (e.g. prompt_template overrides) passed at query time.
@@ -438,7 +536,6 @@ impl Default for SearchConfig {
             batch_size: 0,
             use_grep: false,
             gemma: 1.0,
-            zmq_port: None,
             pruning_strategy: None,
             provider_options: None,
         }
@@ -448,5 +545,17 @@ impl Default for SearchConfig {
 impl Drop for LeannSearcher {
     fn drop(&mut self) {
         self.cleanup();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_searcher_options_default() {
+        let opts = SearcherOptions::default();
+        assert!(!opts.enable_warmup);
+        assert!(opts.recompute_embeddings.is_none());
     }
 }

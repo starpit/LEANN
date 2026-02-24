@@ -4,13 +4,13 @@
 
 ## Current Status (2026-02-24)
 
-**~13,000 lines of Rust across 4 crates. 231 Rust tests passing (110 unit + 20 tree-sitter + 85 integration + 16 CLI/server) + 34 Python binding tests. 0 errors, 0 warnings.**
+**~13,000 lines of Rust across 4 crates. 243 Rust tests passing (111 unit + 20 tree-sitter + 92 integration + 20 CLI/server) + 34 Python binding tests. 0 errors, 0 warnings.**
 
 All 8 phases of the initial implementation are complete. Since then, major HNSW performance work has been done: SIMD-optimized distance functions (NEON/AVX2), batch-4 distance computation, parallel build with rayon thread pools, flat heaps for cache locality, early termination, prefetching in hot paths, `SearchBuffers` for heap/visited-list reuse, and a `VisitedList` with generation-counter reset. The pure-Rust HNSW engine now matches or approaches FAISS C++ performance. Criterion benchmark suite and Rust-vs-Python comparison scripts validate this.
 
 Tree-sitter AST chunking now brings the Rust port to parity with the Python `astchunk` integration, supporting Python, Java, C#, TypeScript/TSX, and JavaScript grammars behind opt-in feature flags.
 
-Modular compilation via Cargo feature flags (`chat`, `embedding-remote`, `embedding-zmq`, `parallel`, `bm25`, `watch`, `pdf`, `tree-sitter`) enables slim builds for embedded or constrained use cases.
+Modular compilation via Cargo feature flags (`chat`, `embedding-remote`, `parallel`, `bm25`, `watch`, `pdf`, `tree-sitter`) enables slim builds for embedded or constrained use cases. The ZMQ embedding server/client (`embedding-zmq`) has been removed — embedding providers (Ollama, OpenAI, Gemini) are wired directly into `LeannSearcher` as in-process HTTP clients, eliminating the subprocess architecture.
 
 What remains is hardening: ONNX Runtime activation, Python example porting, and CI setup.
 
@@ -18,8 +18,8 @@ What remains is hardening: ONNX Runtime activation, Python example porting, and 
 
 | Crate | LOC | Status |
 |-------|-----|--------|
-| `leann-core` | 11,019 | Complete - all modules implemented with 130 unit tests (110 default + 20 tree-sitter); extensive HNSW optimization; modular feature flags |
-| `leann-cli` | 1,405 | Complete - all 8 commands wired up, aligned with Python CLI |
+| `leann-core` | 11,019 | Complete - all modules implemented with 131 unit tests (111 default + 20 tree-sitter); extensive HNSW optimization; modular feature flags; in-process embedding providers |
+| `leann-cli` | 1,450 | Complete - all 9 commands wired up (build/search/ask/react/list/remove/watch/serve/warmup), aligned with Python CLI |
 | `leann-server` | 223 | Complete - all endpoints functional with state management |
 | `leann-python` | 736 | Complete - PyO3 0.25, maturin build tested, 34 Python tests, `.pyi` stubs, search kwargs wired |
 
@@ -41,7 +41,7 @@ leann-rs/
       passages.rs              (634)  # PassageManager, JSONL I/O, Vec<u64> offset map [9 tests]
       bm25.rs                  (392)  # BM25Scorer [14 tests]
       builder.rs               (517)  # LeannBuilder (build + from_embeddings)
-      searcher.rs              (443)  # LeannSearcher (vector/BM25/grep/hybrid search)
+      searcher.rs              (443)  # LeannSearcher (vector/BM25/grep/hybrid search, in-process provider)
       chat.rs                  (362)  # LlmProvider trait + Ollama/OpenAI/Anthropic/Gemini/Simulated
       react_agent.rs           (335)  # ReAct agent [11 tests]
       sync.rs                  (279)  # MerkleTree + FileSynchronizer [2 tests]
@@ -54,10 +54,8 @@ leann-rs/
         csr.rs                 (150)  # CSR conversion + embedding pruning [1 test]
         io.rs                  (404)  # Binary format read/write (compact + standard) [1 test]
       embedding/
-        mod.rs                  (60)  # EmbeddingProvider trait, EmbeddingMode enum
-        client.rs              (178)  # ZMQ REQ client (text/distance/by-id)
-        server.rs              (213)  # ZMQ REP server (3 request types)
-        manager.rs             (212)  # Subprocess lifecycle, port allocation
+        mod.rs                 (100)  # EmbeddingProvider trait, EmbeddingMode enum, create_embedding_provider() factory
+        manager.rs             (212)  # Subprocess lifecycle, port allocation (legacy, may be removed)
         openai.rs              (131)  # OpenAI embedding API
         ollama.rs              (260)  # Ollama embedding API (pipelined async)
         gemini.rs              (117)  # Gemini batch embedding API
@@ -71,7 +69,7 @@ leann-rs/
         mod.rs                  (67)  # extract_text dispatcher, is_binary_document
         pdf.rs                 (102)  # PDF text extraction via pdf-extract [3 tests]
     leann-cli/src/
-      main.rs                (1,405)  # clap CLI: build/search/ask/react/list/remove/watch/serve
+      main.rs                (1,450)  # clap CLI: build/search/ask/react/list/remove/watch/serve/warmup
     leann-server/src/
       main.rs                  (223)  # Axum server: health/indexes/search/info endpoints
     leann-python/
@@ -113,7 +111,7 @@ LEANN is a ~15K LOC Python vector database/RAG system with a custom C++ FAISS fo
 | Settings (`settings.py`) | URL/API key resolution from env | ~100 | (stdlib only) |
 
 ### Key Protocols
-- **ZMQ Embedding Recompute**: REQ/REP over msgpack. Three message types: text embedding (list of strings), distance calculation ([[ids], [query_vec]]), embedding-by-id ([[ids]])
+- **Embedding Recompute**: In Rust, embedding providers are in-process HTTP clients — no ZMQ subprocess needed. The recompute callback in `search_hnsw_recompute` calls the provider directly, looks up passage texts, computes embeddings, and computes distances locally via SIMD. (Python uses ZMQ REQ/REP over msgpack for the C++/FAISS boundary.)
 - **Index file format**: `<name>.meta.json` + `<name>.passages.jsonl` + `<name>.passages.idx` (Vec<u64> byte offsets; Python version uses pickle) + `<name>.index` (FAISS/DiskANN binary)
 - **Backend plugin system**: Auto-discovery via `leann-backend-*` package naming + `@register_backend` decorator
 
@@ -127,17 +125,17 @@ LEANN is a ~15K LOC Python vector database/RAG system with a custom C++ FAISS fo
 ```toml
 [workspace.dependencies]
 serde, serde_json, tokio, anyhow, thiserror, tracing, tracing-subscriber,
-ndarray, rand, zeromq, rmp-serde, reqwest (blocking+json), clap, rayon, memmap2,
+ndarray, rand, reqwest (blocking+json), clap, rayon, memmap2,
 axum, tower, tower-http, tiktoken-rs, sha2, regex, uuid, indicatif, notify, libc
 ```
+Note: `zeromq` and `rmp-serde` remain in workspace deps (for potential future use) but are no longer used by `leann-core`.
 
 ### Feature flags (`leann-core/Cargo.toml`):
 ```toml
-default = ["chat", "embedding-remote", "embedding-zmq", "parallel", "bm25", "watch", "pdf"]
+default = ["chat", "embedding-remote", "parallel", "bm25", "watch", "pdf"]
 pdf              # dep:pdf-extract
 chat             # dep:reqwest — LLM chat backends + ReAct agent
-embedding-remote # dep:reqwest, dep:tokio — OpenAI, Ollama, Gemini embedding providers
-embedding-zmq    # dep:zeromq, dep:rmp-serde, dep:tokio — ZMQ embedding server/client
+embedding-remote # dep:reqwest, dep:tokio — OpenAI, Ollama, Gemini embedding providers (wired into LeannSearcher)
 parallel         # dep:rayon — parallel HNSW build
 bm25             # (no extra deps) — BM25 keyword search
 watch            # dep:sha2 — Merkle-tree incremental sync
@@ -149,6 +147,8 @@ tree-sitter-typescript # dep:tree-sitter, dep:tree-sitter-typescript
 tree-sitter-javascript # dep:tree-sitter, dep:tree-sitter-javascript
 full             # all of the above (including tree-sitter)
 ```
+
+Note: `embedding-zmq` was removed — embedding providers are now in-process HTTP clients wired directly into `LeannSearcher`, eliminating the ZMQ subprocess architecture. The `zeromq` and `rmp-serde` dependencies have been removed.
 
 PyO3 0.25 used for leann-python (standalone crate, Python 3.14 compatible).
 
@@ -192,7 +192,7 @@ PyO3 0.25 used for leann-python (standalone crate, Python 3.14 compatible).
 - **VisitedList**: Generation-counter visited tracking (O(1) reset instead of HashSet realloc)
 - **Prefetching**: Cache-line prefetch of neighbor data in search hot path
 - `search_hnsw` (stored vectors) and `search_hnsw_recompute` (callback-based distance computation)
-- `SearchParams`: ef_search, beam_size, prune_ratio, pruning_strategy, batch_size
+- `SearchParams`: ef_search, beam_size, prune_ratio, recompute_embeddings, pruning_strategy, batch_size
 - `PruningStrategy` enum: Global, Local, Proportional
 - 2 tests: stored vector search + recompute callback search
 
@@ -241,18 +241,22 @@ PyO3 0.25 used for leann-python (standalone crate, Python 3.14 compatible).
 
 ## Phase 4: Embedding Infrastructure [COMPLETE]
 
-### 4a. ZMQ Embedding Server (`embedding/server.rs`) [COMPLETE]
-- ZMQ REP socket with 3 request types: text embedding, distance calculation, embedding-by-id
-- Msgpack serialization, tokio timeout-based shutdown
-- Distance computation for L2 and MIPS/Cosine
+### 4a. In-Process Embedding Providers [COMPLETE]
+- Embedding providers (Ollama, OpenAI, Gemini) are wired directly into `LeannSearcher` as in-process HTTP clients
+- `create_embedding_provider()` factory in `embedding/mod.rs` dispatches on `EmbeddingMode` and options map
+- Provider is constructed from `IndexMeta` at `LeannSearcher::open()` time — no manual server startup needed
+- Recompute callback uses provider to compute embeddings for passage texts, then computes distances locally via SIMD
 
-### 4b. ZMQ Client (`embedding/client.rs`) [COMPLETE]
-- `EmbeddingClient` with `compute_text_embeddings`, `compute_distances`, `get_embeddings_by_id`
-- zeromq async sockets with tokio runtime
+### ~~4a-old. ZMQ Embedding Server/Client~~ [REMOVED]
+- `embedding/client.rs` (ZMQ REQ) and `embedding/server.rs` (ZMQ REP) have been deleted
+- `embedding-zmq` feature flag removed from `Cargo.toml`
+- `zeromq` and `rmp-serde` dependencies removed
+- Rationale: In Rust, the HNSW search is pure Rust and embedding providers are in-process HTTP clients — the ZMQ subprocess architecture was unnecessary overhead from the Python C++/FAISS boundary
 
-### 4c. Server Manager (`embedding/manager.rs`) [COMPLETE]
+### 4b. Server Manager (`embedding/manager.rs`) [LEGACY]
 - `EmbeddingServerManager`: subprocess lifecycle, port allocation, config signature-based reuse
 - Graceful shutdown (SIGTERM then SIGKILL after timeout)
+- Note: May be removed in a future cleanup since providers are now in-process
 
 ### 4d. ONNX Runtime Inference (`embedding/onnx.rs`) [SCAFFOLD]
 - `OnnxEmbedding` struct with model path resolution
@@ -276,11 +280,13 @@ PyO3 0.25 used for leann-python (standalone crate, Python 3.14 compatible).
 - L2 normalization for cosine distance
 
 ### 5b. LeannSearcher (`searcher.rs`) [COMPLETE]
-- `open`: loads meta, passages, graph, id_map
-- `search` / `search_with_params`: vector search with recompute via ZMQ
+- `open`: loads meta, passages, graph, id_map, constructs embedding provider from meta
+- `search` / `search_with_params`: vector search via in-process provider (recompute or stored vectors)
 - BM25 search, grep search (regex), hybrid search (gemma weighting)
 - Metadata filtering, passage enrichment
-- `SearchConfig`: complexity, beam_width, prune_ratio, metadata_filters, batch_size, use_grep, gemma, zmq_port
+- `warmup()`: probe embedding request to verify provider connectivity
+- `SearcherOptions`: `enable_warmup`, `recompute_embeddings` override
+- `SearchConfig`: complexity, beam_width, prune_ratio, metadata_filters, batch_size, use_grep, gemma, pruning_strategy, provider_options
 
 ### 5c. LeannChat (`chat.rs`) [COMPLETE]
 - `LlmProvider` trait with `ask()` method
@@ -302,12 +308,13 @@ PyO3 0.25 used for leann-python (standalone crate, Python 3.14 compatible).
 
 ### All commands implemented (aligned with Python CLI):
 - `leann build [name] --docs <path>...` — Full pipeline: recursive document loading (30+ file extensions), sentence chunking with configurable size/overlap, embedding computation, HNSW build. Supports both files and directories via `--docs`.
-- `leann search <name> <query>` — Vector search with configurable complexity, `--show-metadata`, `--embedding-prompt-template`
+- `leann search <name> <query>` — Vector search with configurable complexity, `--show-metadata`, `--embedding-prompt-template`, `--warmup/--no-warmup`
 - `leann ask <name> [question]` — Single-shot RAG Q&A with `--thinking-budget` support
 - `leann ask <name> --interactive` — Interactive REPL mode
 - `leann react <name> <query>` — Multi-turn ReAct agent for complex retrieval
 - `leann list` — Scans for `.meta.json` files in current project and app-format indexes
 - `leann remove <name>` — Deletes index directory with confirmation (or `--force`)
+- `leann warmup <name>` — Verifies embedding provider connectivity for an index
 - `leann watch <name>` — Reports file changes since last checkpoint using `FileSynchronizer`
 - `leann serve [--host --port]` — Starts embedded axum server
 
@@ -391,9 +398,10 @@ Maps the Python test suite (`tests/test_*.py`) to equivalent Rust integration te
 ### Test File Layout
 
 ```
-crates/leann-core/tests/         # 85 integration tests
+crates/leann-core/tests/         # 92 integration tests
   common/mod.rs              # ✅ Shared helpers: FakeEmbeddingProvider, temp_dir, sample docs
-  test_build_search.rs       # ✅ 11 tests — Core pipeline: build → search → verify
+  test_build_search.rs       # ✅ 12 tests — Core pipeline: build → search → verify (incl. provider-based)
+  test_search_with_provider.rs # ✅ 7 tests — Provider-based search, warmup, factory dispatch
   test_metadata_filtering.rs # ✅ 16 tests — All 13 operators via BM25 search + filter e2e
   test_document_loading.rs   # ✅ 17 tests — Load txt/md/rs/py → chunk → AST chunking
   test_python_compat.rs      # ✅ 11 tests — Cross-impl format compat (meta.json, FAISS FourCC, passages)
@@ -403,9 +411,10 @@ crates/leann-core/tests/         # 85 integration tests
   test_embedding_manager.rs  # ✅ 5 tests — EmbeddingServerManager lifecycle
   test_index_format.rs       # ✅ 3 tests — Index meta schema, distance metric, recompute flag
 
-crates/leann-cli/tests/          # 12 tests
-  test_cli_args.rs           # ✅ 7 tests — Help output, version, argument parsing
+crates/leann-cli/tests/          # 16 tests
+  test_cli_args.rs           # ✅ 10 tests — Help output, version, argument parsing, warmup flags
   test_cli_list_remove.rs    # ✅ 5 tests — List + remove lifecycle via subprocess
+  (note: 1 skipped in leann-server for unrelated fixture)
 
 crates/leann-server/tests/       # 4 tests
   test_server_endpoints.rs   # ✅ 4 tests — health, indexes, not_found, index info
@@ -470,10 +479,10 @@ Uses 10 diverse documents (animals, programming, weather, databases, cooking) wi
 |------|-----------------|
 | `test_pure_vector_search` | `gemma=1.0` — results come from vector search only |
 | `test_pure_keyword_search` | `gemma=0.0` — results come from BM25 only, matching keyword query |
-| `test_hybrid_balanced` | `gemma=0.5` — returns results (non-empty) |
-| `test_hybrid_vector_heavy` | `gemma=0.8` — results skew toward vector |
-| `test_hybrid_keyword_heavy` | `gemma=0.2` — results skew toward BM25 |
-| `test_hybrid_with_metadata_filter` | `gemma=0.5` + metadata filter `{"doc_num": {"<": 8}}` — all results have doc_num < 8 |
+| `test_hybrid_balanced` | `gemma=0.5` — returns results (non-empty). Requires embedding provider. |
+| `test_hybrid_vector_heavy` | `gemma=0.8` — results skew toward vector. Requires embedding provider. |
+| `test_hybrid_keyword_heavy` | `gemma=0.2` — results skew toward BM25. Requires embedding provider. |
+| `test_hybrid_with_metadata_filter` | `gemma=0.5` + metadata filter `{"doc_num": {"<": 8}}` — all results have doc_num < 8. Requires embedding provider. |
 | `test_bm25_scores_keyword_match` | Pure BM25 search for "python programming", verify top results contain those terms |
 
 ---
@@ -626,15 +635,15 @@ Uses `axum::test` helpers or spawns server on a random port.
 
 | Category | Runs in CI | Needs network | Actual count |
 |----------|-----------|---------------|--------------|
-| Unit tests (leann-core src/, default features) | Yes | No | 110 |
+| Unit tests (leann-core src/, default features) | Yes | No | 111 |
 | Unit tests (tree-sitter, `--features tree-sitter`) | Yes | No | 20 |
-| Integration tests (leann-core tests/) | Yes | No | 85 |
-| CLI subprocess tests (leann-cli) | Yes | No | 12 |
+| Integration tests (leann-core tests/) | Yes | No | 92 |
+| CLI subprocess tests (leann-cli) | Yes | No | 16 |
 | HTTP server tests (leann-server) | Yes | No | 4 |
 | OpenAI embedding | No (`#[ignore]`) | Yes | 0 (planned) |
 | Ollama embedding | No (`#[ignore]`) | Yes | 0 (planned) |
 | Format compat (Python indexes) | Yes | No | 11 |
-| **Total** | | | **231** (+ 1 ignored doctest) |
+| **Total** | | | **243** (+ 1 ignored doctest) |
 
 ---
 
@@ -668,7 +677,7 @@ Uses `axum::test` helpers or spawns server on a random port.
 | HNSW correctness (search quality regression) | Port existing Python tests, add recall benchmarks against FAISS baseline |
 | FAISS binary format compatibility (reading existing indexes) | Write a dedicated FAISS format reader; alternatively provide a migration CLI tool |
 | ONNX model compatibility with sentence-transformers | Test with top 5 models (contriever, all-mpnet, nomic-embed, bge, e5). Export pipeline: `optimum-cli export onnx` |
-| ZMQ protocol compatibility during migration | Keep exact same msgpack wire format; test interop (Rust client <-> Python server and vice versa) |
+| ~~ZMQ protocol compatibility during migration~~ | ~~Keep exact same msgpack wire format~~ — **Resolved:** ZMQ removed; embedding providers are in-process HTTP clients. |
 | DiskANN backend | Defer to Phase 2 of the project. Initially support HNSW only. DiskANN can be added later via FFI to existing C++ or a pure Rust implementation |
 | PyO3 GIL management for long-running search | Release GIL during search operations with `py.allow_threads()` — already implemented |
 
@@ -676,10 +685,10 @@ Uses `axum::test` helpers or spawns server on a random port.
 
 ## Verification
 
-1. **Unit tests**: 130 passing across leann-core (search_result ×3, settings ×4, index ×4, metadata_filter ×29, passages ×9, bm25 ×14, hnsw/{build ×3, search ×2, graph ×2, csr ×1, io ×1, simd ×12}, chunking/{mod ×2, sentence ×4, ast ×4, tree_sitter ×20}, document_loaders/pdf ×3, react_agent ×11, sync ×2). 110 with default features, +20 with `tree-sitter`. 0 errors, 0 warnings.
+1. **Unit tests**: 131 passing across leann-core (search_result ×3, settings ×4, index ×4, metadata_filter ×29, passages ×9, bm25 ×14, hnsw/{build ×3, search ×2, graph ×2, csr ×1, io ×1, simd ×12}, chunking/{mod ×2, sentence ×4, ast ×4, tree_sitter ×20}, document_loaders/pdf ×3, react_agent ×11, sync ×2, searcher ×1). 111 with default features, +20 with `tree-sitter`. 0 errors, 0 warnings.
 2. **CLI conformance**: Rust CLI options aligned with Python CLI (2026-02-19) — verified via `--help` output comparison
-3. **Integration tests**: 85 passing across 9 test files in leann-core. Coverage: core build/search pipeline (11 tests), metadata filtering with all 13 operators via BM25+filter e2e (16 tests), BM25/grep search via LeannSearcher (8 tests), document loading + AST chunking (17 tests), cross-implementation format compatibility (11 tests), file sync/Merkle tree (9 tests), chat/LLM pipeline (5 tests), embedding server manager lifecycle (5 tests), index file format validation (3 tests). All use FakeEmbeddingProvider for deterministic, network-free execution.
-4. **CLI/server tests**: 16 passing — CLI subprocess/help tests (7 in leann-cli), CLI list/remove lifecycle (5 in leann-cli), HTTP server endpoints (4 in leann-server).
+3. **Integration tests**: 92 passing across 10 test files in leann-core. Coverage: core build/search pipeline (12 tests), provider-based search/warmup/factory (7 tests), metadata filtering with all 13 operators via BM25+filter e2e (16 tests), BM25/grep search via LeannSearcher (8 tests), document loading + AST chunking (17 tests), cross-implementation format compatibility (11 tests), file sync/Merkle tree (9 tests), chat/LLM pipeline (5 tests), embedding server manager lifecycle (5 tests), index file format validation (3 tests). All use FakeEmbeddingProvider for deterministic, network-free execution.
+4. **CLI/server tests**: 20 passing — CLI subprocess/help tests (10 in leann-cli, including warmup command and search warmup flag tests), CLI list/remove lifecycle (5 in leann-cli), HTTP server endpoints (4 in leann-server).
 5. **Python binding tests**: `tests/test_bindings.py` — 34 pytest tests: import/introspection, constructor, error handling, integration (build_index_from_embeddings roundtrip), API compliance
 6. **Benchmark**: Criterion benchmark suite implemented (`cargo bench --package leann-core`) with 5 groups: distance computation (SIMD at 128/384/768 dims), HNSW build (100/1K/10K/50K), HNSW search (ef 16-256), HNSW search recompute (ef 16-256), full pipeline (build+write+read+search). JSON output binary with quantile tracking and RNG seed support for scripted comparison. Python FAISS comparison suite at `benchmarks/` with orchestration script (`benchmarks/compare_rust_python.sh`). See Benchmark Results below for detailed numbers.
 7. **Format compatibility**: 11 tests in `test_python_compat.rs` verify on-disk format matches Python expectations. `.meta.json`, `.passages.jsonl`, `.index` (FAISS binary), `.ids.txt` are all compatible. `.passages.idx` is incompatible (Rust text offsets vs Python pickle dict). See [RUST_API_COMPLIANCE.md](RUST_API_COMPLIANCE.md).

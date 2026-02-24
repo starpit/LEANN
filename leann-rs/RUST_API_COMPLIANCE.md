@@ -3,7 +3,7 @@
 Tracks how closely the Rust PyO3 bindings (`crates/leann-python`) match the Python
 `leann.api` module (`packages/leann-core/src/leann/api.py`).
 
-**Last updated:** 2026-02-23
+**Last updated:** 2026-02-24
 
 **Legend:** Compliant | Partial | Non-compliant | N/A
 
@@ -74,7 +74,7 @@ Python also exports `SearchResult` via the dataclass import path; Rust exposes i
 |---------|--------|------|--------|-------|
 | Constructor signature | `(backend_name, embedding_model, dimensions, embedding_mode, embedding_options, **backend_kwargs)` | `(backend_name="hnsw", embedding_model, dimensions, embedding_mode, embedding_options, **kwargs)` | Compliant | Rust defaults `backend_name` to `"hnsw"` |
 | `add_text(text, metadata=None)` | Appends chunk | Appends chunk | Compliant | |
-| `build_index(index_path)` | Uses configured `embedding_mode` (sentence-transformers, mlx, openai, gemini) | Dispatches on `embedding_mode` via `create_embedding_provider()` | Compliant | Supports ollama, openai, gemini, and sentence-transformers/zmq. MLX not ported (N/A). |
+| `build_index(index_path)` | Uses configured `embedding_mode` (sentence-transformers, mlx, openai, gemini) | Dispatches on `embedding_mode` via `create_embedding_provider()` | Compliant | Supports ollama, openai, gemini. Sentence-transformers falls back to OpenAI/Ollama (ZMQ removed). MLX not ported (N/A). |
 | `build_index_from_embeddings` | `(index_path, embeddings_file)` — pickle path | `(index_path, ids, embeddings)` — direct data | **Non-compliant** | Different signatures. Rust takes IDs + embedding lists directly; Python takes a path to a pickle file containing `(ids, embeddings)` tuple. |
 | `update_index(index_path)` | Appends passages + vectors to existing index | Not implemented | **Non-compliant** | Incremental update not yet ported to Rust. |
 | Backend kwarg: `M` | Forwarded to HNSW builder | Extracted and applied | Compliant | |
@@ -92,7 +92,7 @@ Python also exports `SearchResult` via the dataclass import path; Rust exposes i
 | Feature | Python | Rust | Status | Notes |
 |---------|--------|------|--------|-------|
 | Constructor: `index_path` | Required | Required | Compliant | |
-| Constructor: `enable_warmup=True` | Triggers background embedding server startup | Sends dummy ZMQ request to verify server | Compliant | Warmup sends a test embedding request; warns on failure. Requires `embedding-zmq` feature. |
+| Constructor: `enable_warmup=True` | Triggers background embedding server startup | Sends probe embedding request via in-process provider | Compliant | Warmup sends a test embedding request to verify provider connectivity; warns on failure. No ZMQ — uses direct provider call. |
 | Constructor: `recompute_embeddings=True` | Controls recompute path at search time | Overrides `meta.json` value via `open_with_options` | Compliant | Passed through `SearcherOptions` to override the meta default. |
 | Constructor: `**backend_kwargs` | Forwarded to backend factory | Accepted; useful kwargs handled via dedicated params | **Partial** | No backend factory abstraction in Rust. Warmup/recompute handled via `SearcherOptions`; search config via `SearchConfig`. Low impact: all useful kwargs are already wired. |
 | `search()` signature | `(query, top_k=5, complexity=64, ...)` — named params | `(query, top_k=5, **kwargs)` — kwargs-based | Compliant | Both accept the same parameter names. |
@@ -103,7 +103,7 @@ Python also exports `SearchResult` via the dataclass import path; Rust exposes i
 | `search()`: `batch_size` | Controls batching | Forwarded to `SearchConfig.batch_size` | Compliant | |
 | `search()`: `use_grep` | Regex-based text search | Forwarded to `SearchConfig.use_grep` | Compliant | |
 | `search()`: `gemma` | Vector/BM25 blend weight | Forwarded to `SearchConfig.gemma` | Compliant | |
-| `search()`: `expected_zmq_port` | ZMQ server port | Forwarded (also accepts `zmq_port`) | Compliant | |
+| `search()`: `expected_zmq_port` | ZMQ server port | Accepted and ignored (backward compat) | Compliant | ZMQ removed; kwarg accepted silently for Python callers that still pass it. |
 | `search()`: `pruning_strategy` | `"global"` / `"local"` / `"proportional"` | Extracted from kwargs and forwarded to `SearchParams` | Compliant | |
 | `search()`: `provider_options` | Override embedding template | Extracted from kwargs to `SearchConfig.provider_options` | Compliant | Wired through PyO3; stored as `HashMap<String, Value>`. |
 | `search()`: `recompute_embeddings` | Per-call override (deprecated in Python) | Not supported | **Non-compliant** | Python deprecated this param; Rust omits it. Configure at constructor instead. |
@@ -261,12 +261,14 @@ Note: Python's `SimulatedChat` exists (type `"simulated"` in `get_llm`).
 
 | Provider | Python | Rust | Status |
 |----------|--------|------|--------|
-| Sentence-Transformers (via ZMQ server) | `embedding_compute.py` + ZMQ | `embedding/server.rs` + `client.rs` | Compliant |
-| OpenAI Embeddings | `embedding_compute.py` | `embedding/openai.rs` | Compliant |
-| Ollama Embeddings | `embedding_compute.py` | `embedding/ollama.rs` (pipelined async) | Compliant |
-| Gemini Embeddings | `embedding_compute.py` | `embedding/gemini.rs` | Compliant |
+| ~~Sentence-Transformers (via ZMQ server)~~ | `embedding_compute.py` + ZMQ | **Removed** — falls back to OpenAI/Ollama | N/A |
+| OpenAI Embeddings | `embedding_compute.py` | `embedding/openai.rs` — wired into `LeannSearcher` | Compliant |
+| Ollama Embeddings | `embedding_compute.py` | `embedding/ollama.rs` (pipelined async) — wired into `LeannSearcher` | Compliant |
+| Gemini Embeddings | `embedding_compute.py` | `embedding/gemini.rs` — wired into `LeannSearcher` | Compliant |
 | MLX (Apple Silicon) | `embedding_compute.py` | Not implemented | N/A |
 | ONNX Runtime (local) | Not available | Scaffold only (`embedding/onnx.rs`) | N/A |
+
+Note: The ZMQ embedding server/client (`client.rs`, `server.rs`) and `embedding-zmq` feature have been removed. Embedding providers are now in-process HTTP clients constructed from `IndexMeta` at `LeannSearcher::open()` time. The `create_embedding_provider()` factory in `embedding/mod.rs` dispatches on mode (ollama, openai, gemini), with sentence-transformers mode falling back to OpenAI then Ollama.
 
 ---
 
@@ -302,7 +304,7 @@ These are not part of the PyO3 API surface but affect build-time behavior and ou
 
 ### Medium (functional gaps)
 
-2. ~~**`build_index` embedding provider flexibility**~~ — Resolved: `create_embedding_provider()` dispatches on `embedding_mode` (ollama, openai, gemini, sentence-transformers/zmq).
+2. ~~**`build_index` embedding provider flexibility**~~ — Resolved: `create_embedding_provider()` in `embedding/mod.rs` dispatches on `embedding_mode` (ollama, openai, gemini; sentence-transformers falls back to OpenAI/Ollama).
 3. ~~**`LeannChat.ask()`: `llm_kwargs`**~~ — Resolved: `temperature`, `max_tokens`, `top_p`, and extras extracted from kwargs and forwarded via `LlmParams`.
 4. ~~**`search()`: `provider_options`**~~ — Resolved: extracted from PyO3 kwargs to `SearchConfig.provider_options`.
 5. ~~**`distance_metric` kwargs extraction**~~ — Resolved: extracted from PyO3 kwargs and applied via `with_distance_metric()`.

@@ -182,6 +182,18 @@ enum Commands {
         /// Prompt template to prepend to query for embedding
         #[arg(long)]
         embedding_prompt_template: Option<String>,
+        /// Warmup embedding provider before search (default: true)
+        #[arg(long)]
+        warmup: bool,
+        /// Disable warmup
+        #[arg(long = "no-warmup")]
+        no_warmup: bool,
+    },
+
+    /// Verify embedding provider connectivity for an index
+    Warmup {
+        /// Index name
+        index_name: String,
     },
 
     /// Ask questions
@@ -411,8 +423,11 @@ fn main() -> Result<()> {
             non_interactive,
             show_metadata,
             embedding_prompt_template,
+            warmup: _,
+            no_warmup,
         } => {
             let _recompute = !no_recompute;
+            let warmup = !no_warmup; // default true unless --no-warmup
             cmd_search(
                 &index_name,
                 &query,
@@ -421,6 +436,7 @@ fn main() -> Result<()> {
                 beam_width,
                 prune_ratio,
                 show_metadata,
+                warmup,
             )?;
         }
         Commands::Ask {
@@ -489,6 +505,9 @@ fn main() -> Result<()> {
                 api_base.as_deref(),
                 api_key.as_deref(),
             )?;
+        }
+        Commands::Warmup { index_name } => {
+            cmd_warmup(&index_name)?;
         }
         Commands::List => {
             cmd_list()?;
@@ -697,6 +716,7 @@ fn is_code_file(path: &str) -> bool {
 // Search
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_search(
     index_name: &str,
     query: &str,
@@ -705,11 +725,16 @@ fn cmd_search(
     beam_width: usize,
     prune_ratio: f64,
     show_metadata: bool,
+    warmup: bool,
 ) -> Result<()> {
-    use leann_core::searcher::{LeannSearcher, SearchConfig};
+    use leann_core::searcher::{LeannSearcher, SearchConfig, SearcherOptions};
 
     let index_path = resolve_index_for_search(index_name)?;
-    let searcher = LeannSearcher::open(&index_path)?;
+    let options = SearcherOptions {
+        enable_warmup: warmup,
+        ..Default::default()
+    };
+    let searcher = LeannSearcher::open_with_options(&index_path, &options)?;
     let results = searcher.search_with_params(
         query,
         top_k,
@@ -868,6 +893,23 @@ fn cmd_react(
     let answer = agent.run(query, top_k)?;
     println!("\n{}", answer);
 
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Warmup
+// ---------------------------------------------------------------------------
+
+fn cmd_warmup(index_name: &str) -> Result<()> {
+    use leann_core::searcher::{LeannSearcher, SearcherOptions};
+
+    let index_path = resolve_index_for_search(index_name)?;
+    let options = SearcherOptions {
+        enable_warmup: true,
+        ..Default::default()
+    };
+    let _searcher = LeannSearcher::open_with_options(&index_path, &options)?;
+    println!("Warmup successful for index '{}'.", index_name);
     Ok(())
 }
 
@@ -1361,7 +1403,10 @@ fn walk_dir(dir: &Path, include_hidden: bool, callback: &mut dyn FnMut(&Path)) {
     }
 }
 
-/// Create an embedding provider based on mode and options.
+/// Create an embedding provider based on mode and CLI options.
+///
+/// Thin wrapper around [`leann_core::embedding::create_embedding_provider`]
+/// that converts CLI-style individual args into the options map.
 fn create_embedding_provider(
     mode: &leann_core::embedding::EmbeddingMode,
     model: &str,
@@ -1369,37 +1414,15 @@ fn create_embedding_provider(
     api_base: Option<&str>,
     api_key: Option<&str>,
 ) -> Result<Box<dyn leann_core::embedding::EmbeddingProvider>> {
-    use leann_core::embedding::EmbeddingMode;
-
-    match mode {
-        EmbeddingMode::OpenAI => {
-            let provider = leann_core::embedding::openai::OpenAiEmbedding::new(
-                model, api_key, api_base, None,
-            )?;
-            Ok(Box::new(provider))
-        }
-        EmbeddingMode::Ollama => {
-            let provider = leann_core::embedding::ollama::OllamaEmbedding::new(model, host);
-            Ok(Box::new(provider))
-        }
-        EmbeddingMode::Gemini => {
-            let provider = leann_core::embedding::gemini::GeminiEmbedding::new(model, api_key)?;
-            Ok(Box::new(provider))
-        }
-        _ => {
-            // sentence-transformers / mlx: try OpenAI, fall back to Ollama
-            if let Ok(provider) = leann_core::embedding::openai::OpenAiEmbedding::new(
-                "text-embedding-3-small",
-                None,
-                None,
-                None,
-            ) {
-                Ok(Box::new(provider))
-            } else {
-                let provider =
-                    leann_core::embedding::ollama::OllamaEmbedding::new("nomic-embed-text", None);
-                Ok(Box::new(provider))
-            }
-        }
+    let mut options = std::collections::HashMap::new();
+    if let Some(h) = host {
+        options.insert("host".to_string(), serde_json::json!(h));
     }
+    if let Some(b) = api_base {
+        options.insert("base_url".to_string(), serde_json::json!(b));
+    }
+    if let Some(k) = api_key {
+        options.insert("api_key".to_string(), serde_json::json!(k));
+    }
+    leann_core::embedding::create_embedding_provider(mode, model, &options)
 }

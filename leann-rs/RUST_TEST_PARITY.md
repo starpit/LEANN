@@ -2,7 +2,7 @@
 
 Comparison of Python test coverage (`tests/`) with Rust test coverage (`crates/leann-core/`, `crates/leann-cli/`, `crates/leann-server/`).
 
-**Rust totals: 231 tests (110 unit + 20 tree-sitter + 85 leann-core integration + 12 leann-cli + 4 leann-server), 0 failures.**
+**Rust totals: 243 tests (111 unit + 20 tree-sitter + 92 leann-core integration + 16 leann-cli + 4 leann-server), 0 failures.**
 
 ## Core Feature Tests
 
@@ -25,8 +25,9 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 | — | `test_build_from_precomputed_embeddings` | [test_build_search.rs](crates/leann-core/tests/test_build_search.rs) |
 | — | `test_hnsw_index_compact_roundtrip` | [test_build_search.rs](crates/leann-core/tests/test_build_search.rs) |
 | — | `test_hnsw_index_standard_roundtrip` | [test_build_search.rs](crates/leann-core/tests/test_build_search.rs) |
+| — | `test_build_and_search_with_provider` | [test_build_search.rs](crates/leann-core/tests/test_build_search.rs) |
 
-**Status: Fully covered.** 11 integration tests vs Python's 3 — deeper coverage of build/search paths including compact CSR, distance metrics, and index serialization.
+**Status: Fully covered.** 12 integration tests vs Python's 3 — deeper coverage of build/search paths including compact CSR, distance metrics, index serialization, and provider-based search.
 
 ---
 
@@ -79,7 +80,7 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 | — | `test_bm25_nonexistent_terms` | [test_hybrid_search.rs](crates/leann-core/tests/test_hybrid_search.rs) |
 | — | `test_bm25_with_sample_documents` | [test_hybrid_search.rs](crates/leann-core/tests/test_hybrid_search.rs) |
 
-**Status: Partially covered.** BM25 and grep paths fully tested (8 tests). Hybrid blend tests (`gemma` between 0 and 1) require a ZMQ embedding server and are not portable without mocking.
+**Status: Partially covered.** BM25 and grep paths fully tested (8 tests). Hybrid blend tests (`gemma` between 0 and 1) require a live embedding provider (Ollama/OpenAI) and are not portable without mocking.
 
 ---
 
@@ -126,7 +127,8 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 
 | Test File | Tests | Description |
 |---|---|---|
-| `test_build_search.rs` | 11 | Core pipeline: build → search → verify |
+| `test_build_search.rs` | 12 | Core pipeline: build → search → verify (incl. provider-based) |
+| `test_search_with_provider.rs` | 7 | Provider-based search, warmup, factory dispatch |
 | `test_metadata_filtering.rs` | 16 | All 13 filter operators via BM25 search + filter e2e |
 | `test_hybrid_search.rs` | 8 | BM25 + grep search, metadata filters |
 | `test_document_loading.rs` | 17 | File loading, chunking, AST chunking |
@@ -135,15 +137,16 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 | `test_chat_pipeline.rs` | 5 | SimulatedChat LLM, LlmConfig |
 | `test_embedding_manager.rs` | 5 | EmbeddingServerManager lifecycle |
 | `test_index_format.rs` | 3 | Index meta schema validation |
-| **Subtotal** | **85** | |
+| **Subtotal** | **92** | |
 
 ### CLI Tests (leann-cli)
 
 | Test File | Tests | Description |
 |---|---|---|
-| `test_cli_args.rs` | 7 | Subcommand help, version, argument parsing |
+| `test_cli_args.rs` | 10 | Subcommand help, version, argument parsing, warmup command, search warmup flags |
 | `test_cli_list_remove.rs` | 5 | List + remove lifecycle via subprocess |
-| **Subtotal** | **12** | |
+| (leann-cli also runs 1 test from leann-server fixture) | | |
+| **Subtotal** | **16** | |
 
 ### Server Tests (leann-server)
 
@@ -175,7 +178,8 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 | `settings.rs` | 4 | Ollama host, OpenAI key, URL cleaning |
 | `sync.rs` | 2 | Hash data, Merkle tree |
 | `document_loaders/pdf.rs` | 3 | PDF extraction |
-| **Subtotal** | **130** (110 default + 20 tree-sitter) | |
+| `searcher.rs` | 1 | SearcherOptions default |
+| **Subtotal** | **131** (111 default + 20 tree-sitter) | |
 
 ---
 
@@ -202,13 +206,14 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 
 | Category | Python Tests | Rust Tests | Parity |
 |---|---|---|---|
-| Build & Search | 3 | 11 | Rust exceeds |
+| Build & Search | 3 | 12 | Rust exceeds |
+| Provider-based Search | — | 7 | Rust-only (provider wiring, warmup, factory) |
 | Metadata Filtering | 26 | 16 integration + 22 unit | Fully covered |
-| Hybrid Search (BM25) | 7 | 8 | BM25/grep covered; blend requires ZMQ |
+| Hybrid Search (BM25) | 7 | 8 | BM25/grep covered; blend requires provider |
 | Sync | 5 | 9 | Rust exceeds |
 | AST Chunking / Doc Loading | 20+ | 17 integration + 20 tree-sitter unit | Fully covered (tree-sitter parity) |
 | CI Smoke Tests | 4 | 5 | Fully covered |
-| CLI Args & Lifecycle | 12 | 12 | Fully covered |
+| CLI Args & Lifecycle | 12 | 16 | Rust exceeds (warmup command + flags) |
 | Embedding Manager | 5 | 5 | Partially covered (no server start) |
 | BM25 Scorer | — | 15 unit | Rust-only |
 | Index Format | — | 3 | Rust-only |
@@ -218,4 +223,4 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 | ReAct Agent | — | 11 unit | Rust-only |
 | HTTP Server | — | 4 | Rust-only |
 | Python-specific | 55+ | — | Not applicable |
-| **Total** | | **231** | |
+| **Total** | | **243** | |

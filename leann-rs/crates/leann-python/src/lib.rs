@@ -179,9 +179,7 @@ fn extract_search_config(kw: Option<&Bound<'_, PyDict>>) -> SearchConfig {
     if let Some(v) = extract_kwarg::<f64>(kw, &["gemma"]) {
         config.gemma = v;
     }
-    if let Some(v) = extract_kwarg::<u16>(kw, &["expected_zmq_port", "zmq_port"]) {
-        config.zmq_port = Some(v);
-    }
+    // expected_zmq_port / zmq_port: accepted for backward compat, ignored (ZMQ removed)
     if let Some(v) = extract_kwarg::<String>(kw, &["pruning_strategy"]) {
         config.pruning_strategy = Some(v);
     }
@@ -340,7 +338,7 @@ impl LeannBuilder {
     /// Build the index at the given path.
     ///
     /// Uses the builder's `embedding_mode` and `embedding_model` to select
-    /// the embedding provider (ollama, openai, gemini, or sentence-transformers/zmq).
+    /// the embedding provider (ollama, openai, gemini).
     fn build_index(&mut self, py: Python<'_>, index_path: &str) -> PyResult<()> {
         py.allow_threads(|| {
             let provider = self.inner.create_embedding_provider().map_err(anyhow_to_pyerr)?;
@@ -416,7 +414,7 @@ impl LeannSearcher {
     /// Search the index with optional configuration kwargs.
     ///
     /// Supported kwargs: complexity, beam_width, prune_ratio, metadata_filters,
-    /// batch_size, use_grep, gemma, expected_zmq_port.
+    /// batch_size, use_grep, gemma.
     #[pyo3(signature = (query, top_k=5, **kwargs))]
     fn search(
         &self,
@@ -540,7 +538,7 @@ impl LeannChat {
     /// Ask a question using RAG with optional search and LLM configuration kwargs.
     ///
     /// Search kwargs: complexity, beam_width, prune_ratio, metadata_filters,
-    /// batch_size, use_grep, gemma, expected_zmq_port.
+    /// batch_size, use_grep, gemma.
     /// LLM kwargs: temperature, max_tokens, top_p (plus any extras).
     #[pyo3(signature = (question, top_k=5, **kwargs))]
     fn ask(

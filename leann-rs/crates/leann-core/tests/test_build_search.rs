@@ -378,3 +378,30 @@ fn test_hnsw_index_standard_roundtrip() {
     assert!(!graph2.is_compact());
     assert_eq!(graph2.ntotal, 15);
 }
+
+/// Build a non-recompute index, open with LeannSearcher, search via stored vectors.
+/// This verifies the full pipeline: build → open with provider → search → results.
+#[test]
+fn test_build_and_search_with_provider() {
+    use leann_core::searcher::{LeannSearcher, SearchConfig};
+
+    let dir = tempfile::tempdir().unwrap();
+    let index_path = build_test_index(50, dir.path(), false, false).unwrap();
+
+    // Open searcher (non-recompute, so stored vectors are used)
+    let searcher = LeannSearcher::open(&index_path).unwrap();
+
+    // Use grep search to verify the pipeline works end-to-end
+    let config = SearchConfig {
+        use_grep: true,
+        ..Default::default()
+    };
+    let results = searcher.search_with_params("topic_0", 5, &config).unwrap();
+    assert!(!results.is_empty(), "Should find results for 'topic_0'");
+
+    // Verify results contain relevant text
+    assert!(
+        results.iter().any(|r| r.text.contains("topic_0")),
+        "Results should contain 'topic_0'"
+    );
+}

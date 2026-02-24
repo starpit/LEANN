@@ -13,12 +13,10 @@ pub struct SearchParams {
     pub beam_size: usize,
     /// Ratio of neighbors to prune via approximate distance (0.0 - 1.0).
     pub prune_ratio: f64,
-    /// Whether to recompute embeddings via ZMQ server.
+    /// Whether to recompute embeddings via provider callback.
     pub recompute_embeddings: bool,
     /// Pruning strategy: "global", "local", or "proportional".
     pub pruning_strategy: PruningStrategy,
-    /// ZMQ port for embedding server communication.
-    pub zmq_port: Option<u16>,
     /// Batch size for neighbor processing (0 = disabled).
     pub batch_size: usize,
     /// Whether to check relative distance for early termination.
@@ -40,7 +38,6 @@ impl Default for SearchParams {
             prune_ratio: 0.0,
             recompute_embeddings: true,
             pruning_strategy: PruningStrategy::Global,
-            zmq_port: None,
             batch_size: 0,
             check_relative_distance: true,
         }

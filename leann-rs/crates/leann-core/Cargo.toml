@@ -23,8 +23,6 @@ libc = "0.2"
 
 # Optional — gated by features
 tokio = { workspace = true, optional = true }
-zeromq = { workspace = true, optional = true }
-rmp-serde = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 rayon = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
@@ -45,7 +43,7 @@ tree-sitter-typescript = { workspace = true, optional = true }
 tree-sitter-javascript = { workspace = true, optional = true }
 
 [features]
-default = ["chat", "embedding-remote", "embedding-zmq", "parallel", "bm25", "watch", "pdf"]
+default = ["chat", "embedding-remote", "parallel", "bm25", "watch", "pdf"]
 
 # PDF document loading
 pdf = ["dep:pdf-extract"]
@@ -55,9 +53,6 @@ chat = ["dep:reqwest"]
 
 # Remote embedding providers: OpenAI, Ollama, Gemini (pulls in reqwest + tokio)
 embedding-remote = ["dep:reqwest", "dep:tokio"]
-
-# ZMQ embedding server/client for recompute search (pulls in zeromq, rmp-serde, tokio)
-embedding-zmq = ["dep:zeromq", "dep:rmp-serde", "dep:tokio"]
 
 # Parallel HNSW build via rayon
 parallel = ["dep:rayon"]
@@ -87,7 +82,7 @@ tree-sitter-typescript = ["dep:tree-sitter", "dep:tree-sitter-typescript"]
 tree-sitter-javascript = ["dep:tree-sitter", "dep:tree-sitter-javascript"]
 
 # Everything
-full = ["chat", "embedding-remote", "embedding-zmq", "parallel", "bm25", "watch", "pdf", "tree-sitter"]
+full = ["chat", "embedding-remote", "parallel", "bm25", "watch", "pdf", "tree-sitter"]
 
 [dev-dependencies]
 tempfile = "3"

@@ -141,3 +141,55 @@ fn test_cli_remove_help() {
         "Remove help should mention --force"
     );
 }
+
+/// `leann search --help` mentions warmup flags.
+#[test]
+fn test_cli_search_warmup_flags() {
+    let output = Command::new(leann_bin())
+        .args(["search", "--help"])
+        .output()
+        .expect("Failed to run leann search --help");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("--warmup") || stdout.contains("warmup"),
+        "Search help should mention warmup"
+    );
+    assert!(
+        stdout.contains("--no-warmup") || stdout.contains("no-warmup"),
+        "Search help should mention --no-warmup"
+    );
+}
+
+/// `leann warmup --help` exits 0.
+#[test]
+fn test_cli_warmup_help() {
+    let output = Command::new(leann_bin())
+        .args(["warmup", "--help"])
+        .output()
+        .expect("Failed to run leann warmup --help");
+
+    assert!(output.status.success(), "leann warmup --help should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("index") || stdout.contains("INDEX"),
+        "Warmup help should mention index argument"
+    );
+}
+
+/// `leann --help` mentions warmup subcommand.
+#[test]
+fn test_cli_help_mentions_warmup() {
+    let output = Command::new(leann_bin())
+        .arg("--help")
+        .output()
+        .expect("Failed to run leann --help");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("warmup"),
+        "Help should mention 'warmup' subcommand"
+    );
+}

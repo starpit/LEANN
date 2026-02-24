@@ -7,8 +7,8 @@ Rust implementation of [LEANN](https://github.com/your-org/leann) -- a lightweig
 LEANN-rs is a full rewrite of the Python LEANN system in Rust, providing:
 
 - **Pure Rust HNSW engine** -- build and search without FAISS or any C++ dependencies
-- **Embedding recomputation** -- prune stored embeddings and recompute on-the-fly via ZMQ, reducing index size by ~97%
-- **Multiple embedding backends** -- OpenAI, Ollama (pipelined async), Gemini APIs (ONNX local inference planned)
+- **Embedding recomputation** -- prune stored embeddings and recompute on-the-fly via in-process providers, reducing index size by ~97%
+- **Multiple embedding backends** -- OpenAI, Ollama (pipelined async), Gemini APIs wired directly into the searcher (ONNX local inference planned)
 - **RAG pipeline** -- search + LLM chat with Ollama, OpenAI, and Anthropic providers
 - **Python bindings** -- PyO3-based native module, drop-in replacement for the Python version
 - **HTTP server** -- Axum-based REST API for search
@@ -88,6 +88,7 @@ leann react my-index "complex question requiring multiple searches"
 leann list                         # List all indexes in current directory
 leann remove my-index              # Delete an index and all its files
 leann remove my-index --force      # Delete without confirmation
+leann warmup my-index              # Verify embedding provider connectivity
 leann watch my-index               # Check for file changes since last build
 leann serve --port 8080            # Start HTTP server
 ```
@@ -176,8 +177,7 @@ print(answer)
 | Feature | Dependencies | What it enables |
 |---------|-------------|-----------------|
 | `chat` | `reqwest` | LLM chat backends (OpenAI, Anthropic, Gemini, Ollama) + ReAct agent |
-| `embedding-remote` | `reqwest`, `tokio` | Remote embedding providers (OpenAI, Ollama, Gemini) |
-| `embedding-zmq` | `zeromq`, `rmp-serde`, `tokio` | ZMQ embedding server/client for recompute search |
+| `embedding-remote` | `reqwest`, `tokio` | Remote embedding providers (OpenAI, Ollama, Gemini) wired into `LeannSearcher` |
 | `parallel` | `rayon` | Parallel HNSW build via rayon thread pool |
 | `bm25` | -- | BM25 keyword search + hybrid search |
 | `watch` | `sha2` | Merkle-tree file change detection |
@@ -216,14 +216,15 @@ The core HNSW implementation in `leann-core/src/hnsw/` includes:
 
 ### Embedding Recomputation
 
-Instead of storing all embedding vectors (which dominate index size), LEANN prunes them and recomputes distances on-the-fly during search via a ZMQ REQ/REP protocol:
+Instead of storing all embedding vectors (which dominate index size), LEANN prunes them and recomputes distances on-the-fly during search using in-process embedding providers:
 
 1. The search algorithm encounters a pruned node
-2. It sends node IDs + query vector to the embedding server via ZMQ
-3. The server recomputes embeddings and returns distances
-4. Search continues with fresh distances
+2. The recompute callback looks up passage texts from the `PassageManager`
+3. The embedding provider (Ollama, OpenAI, Gemini) computes fresh embeddings in-process
+4. Distances are computed locally via SIMD (L2/inner product)
+5. Search continues with fresh distances
 
-This achieves ~97% storage reduction with minimal latency impact.
+This achieves ~97% storage reduction with minimal latency impact. Unlike the Python version (which uses a ZMQ subprocess to bridge C++/FAISS), the Rust HNSW engine is pure Rust, so providers are called directly -- no IPC overhead.
 
 ### Index File Format
 
