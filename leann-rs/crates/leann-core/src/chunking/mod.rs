@@ -1,5 +1,13 @@
 pub mod ast;
 pub mod sentence;
+#[cfg(any(
+    feature = "tree-sitter-python",
+    feature = "tree-sitter-java",
+    feature = "tree-sitter-c-sharp",
+    feature = "tree-sitter-typescript",
+    feature = "tree-sitter-javascript",
+))]
+pub mod tree_sitter;
 
 /// Split text into chunks by sentences with overlap.
 pub fn chunk_text(text: &str, chunk_size: usize, chunk_overlap: usize) -> Vec<String> {

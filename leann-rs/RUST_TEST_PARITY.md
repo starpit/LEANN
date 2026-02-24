@@ -2,7 +2,7 @@
 
 Comparison of Python test coverage (`tests/`) with Rust test coverage (`crates/leann-core/`, `crates/leann-cli/`, `crates/leann-server/`).
 
-**Rust totals: 211 tests (110 unit + 85 leann-core integration + 12 leann-cli + 4 leann-server), 0 failures.**
+**Rust totals: 231 tests (110 unit + 20 tree-sitter + 85 leann-core integration + 12 leann-cli + 4 leann-server), 0 failures.**
 
 ## Core Feature Tests
 
@@ -98,7 +98,7 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 
 ### test_astchunk_integration.py — AST Chunking & Document Loading
 
-**Status: Fully covered.** 17 integration tests in test_document_loading.rs cover language detection, traditional chunking, AST chunking (Python/Rust/JS), fallback, metadata preservation, and file loading.
+**Status: Fully covered.** 17 integration tests in test_document_loading.rs cover language detection, traditional chunking, AST chunking (Python/Rust/JS), fallback, metadata preservation, and file loading. Additionally, 20 unit tests in `chunking/tree_sitter.rs` (feature-gated behind `tree-sitter-*`) validate grammar-based AST chunking for Python, Java, C#, TypeScript/TSX, and JavaScript — bringing the Rust chunker to parity with Python's `astchunk` (tree-sitter) integration.
 
 ---
 
@@ -166,7 +166,8 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 | `hnsw/graph.rs` | 2 | Config defaults, FourCC constants |
 | `hnsw/csr.rs` | 1 | CSR conversion |
 | `chunking/mod.rs` | 2 | Basic chunking |
-| `chunking/ast.rs` | 4 | AST chunking (Python, Rust, generic, detection) |
+| `chunking/ast.rs` | 4 | Heuristic AST chunking (Python, Rust, generic, detection) |
+| `chunking/tree_sitter.rs` | 20 | Tree-sitter grammar AST chunking: per-language smoke (Python/Java/C#/TS/TSX/JS), decorators, large function splits, nested classes, line number accuracy, recursive descent, dispatch integration, fallback paths, empty/unsupported input |
 | `chunking/sentence.rs` | 4 | Sentence splitting |
 | `index.rs` | 4 | IndexMeta roundtrip, distance metric, paths |
 | `passages.rs` | 3 | Passage I/O, ID map, not-found error |
@@ -174,7 +175,7 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 | `settings.rs` | 4 | Ollama host, OpenAI key, URL cleaning |
 | `sync.rs` | 2 | Hash data, Merkle tree |
 | `document_loaders/pdf.rs` | 3 | PDF extraction |
-| **Subtotal** | **110** (includes 12 new: 9 react_agent + 14 bm25 + 14 metadata_filter vs prior counts) | |
+| **Subtotal** | **130** (110 default + 20 tree-sitter) | |
 
 ---
 
@@ -205,7 +206,7 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 | Metadata Filtering | 26 | 16 integration + 22 unit | Fully covered |
 | Hybrid Search (BM25) | 7 | 8 | BM25/grep covered; blend requires ZMQ |
 | Sync | 5 | 9 | Rust exceeds |
-| AST Chunking / Doc Loading | 20+ | 17 | Fully covered |
+| AST Chunking / Doc Loading | 20+ | 17 integration + 20 tree-sitter unit | Fully covered (tree-sitter parity) |
 | CI Smoke Tests | 4 | 5 | Fully covered |
 | CLI Args & Lifecycle | 12 | 12 | Fully covered |
 | Embedding Manager | 5 | 5 | Partially covered (no server start) |
@@ -217,4 +218,4 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 | ReAct Agent | — | 11 unit | Rust-only |
 | HTTP Server | — | 4 | Rust-only |
 | Python-specific | 55+ | — | Not applicable |
-| **Total** | | **211** | |
+| **Total** | | **231** | |

@@ -2,13 +2,15 @@
 
 > **Rust port currently based on Python commit [`1da64a9`](https://github.com/nickmccarty/LEANN/commit/1da64a9) (`main` as of 2026-02-20).** When updating the Rust code to match future Python changes, diff from this commit forward.
 
-## Current Status (2026-02-23)
+## Current Status (2026-02-24)
 
-**~12,500 lines of Rust across 4 crates. 211 Rust tests passing (110 unit + 85 integration + 16 CLI/server) + 34 Python binding tests. 0 errors, 0 warnings.**
+**~13,000 lines of Rust across 4 crates. 231 Rust tests passing (110 unit + 20 tree-sitter + 85 integration + 16 CLI/server) + 34 Python binding tests. 0 errors, 0 warnings.**
 
 All 8 phases of the initial implementation are complete. Since then, major HNSW performance work has been done: SIMD-optimized distance functions (NEON/AVX2), batch-4 distance computation, parallel build with rayon thread pools, flat heaps for cache locality, early termination, prefetching in hot paths, `SearchBuffers` for heap/visited-list reuse, and a `VisitedList` with generation-counter reset. The pure-Rust HNSW engine now matches or approaches FAISS C++ performance. Criterion benchmark suite and Rust-vs-Python comparison scripts validate this.
 
-Modular compilation via Cargo feature flags (`chat`, `embedding-remote`, `embedding-zmq`, `parallel`, `bm25`, `watch`, `pdf`) enables slim builds for embedded or constrained use cases.
+Tree-sitter AST chunking now brings the Rust port to parity with the Python `astchunk` integration, supporting Python, Java, C#, TypeScript/TSX, and JavaScript grammars behind opt-in feature flags.
+
+Modular compilation via Cargo feature flags (`chat`, `embedding-remote`, `embedding-zmq`, `parallel`, `bm25`, `watch`, `pdf`, `tree-sitter`) enables slim builds for embedded or constrained use cases.
 
 What remains is hardening: ONNX Runtime activation, Python example porting, and CI setup.
 
@@ -16,7 +18,7 @@ What remains is hardening: ONNX Runtime activation, Python example porting, and 
 
 | Crate | LOC | Status |
 |-------|-----|--------|
-| `leann-core` | 10,159 | Complete - all modules implemented with 110 unit tests; extensive HNSW optimization; modular feature flags |
+| `leann-core` | 11,019 | Complete - all modules implemented with 130 unit tests (110 default + 20 tree-sitter); extensive HNSW optimization; modular feature flags |
 | `leann-cli` | 1,405 | Complete - all 8 commands wired up, aligned with Python CLI |
 | `leann-server` | 223 | Complete - all endpoints functional with state management |
 | `leann-python` | 736 | Complete - PyO3 0.25, maturin build tested, 34 Python tests, `.pyi` stubs, search kwargs wired |
@@ -61,9 +63,10 @@ leann-rs/
         gemini.rs              (117)  # Gemini batch embedding API
         onnx.rs                (102)  # ONNX Runtime scaffold (not yet activated)
       chunking/
-        mod.rs                  (84)  # chunk_text with sentence overlap [2 tests]
+        mod.rs                  (92)  # chunk_text with sentence overlap [2 tests]
         sentence.rs            (121)  # Sentence splitter [4 tests]
-        ast.rs                 (495)  # Python/Rust/JS/TS code chunking [4 tests]
+        ast.rs                 (506)  # Heuristic Python/Rust/JS/TS code chunking, tree-sitter dispatch [4 tests]
+        tree_sitter.rs         (782)  # Tree-sitter grammar-based AST chunking (feature-gated) [20 tests]
       document_loaders/
         mod.rs                  (67)  # extract_text dispatcher, is_binary_document
         pdf.rs                 (102)  # PDF text extraction via pdf-extract [3 tests]
@@ -138,7 +141,13 @@ embedding-zmq    # dep:zeromq, dep:rmp-serde, dep:tokio — ZMQ embedding server
 parallel         # dep:rayon — parallel HNSW build
 bm25             # (no extra deps) — BM25 keyword search
 watch            # dep:sha2 — Merkle-tree incremental sync
-full             # all of the above
+tree-sitter      # umbrella: all tree-sitter languages below
+tree-sitter-python     # dep:tree-sitter, dep:tree-sitter-python
+tree-sitter-java       # dep:tree-sitter, dep:tree-sitter-java
+tree-sitter-c-sharp    # dep:tree-sitter, dep:tree-sitter-c-sharp
+tree-sitter-typescript # dep:tree-sitter, dep:tree-sitter-typescript
+tree-sitter-javascript # dep:tree-sitter, dep:tree-sitter-javascript
+full             # all of the above (including tree-sitter)
 ```
 
 PyO3 0.25 used for leann-python (standalone crate, Python 3.14 compatible).
@@ -321,7 +330,14 @@ PyO3 0.25 used for leann-python (standalone crate, Python 3.14 compatible).
 
 ### Chunking [COMPLETE]
 - Sentence-based chunking with configurable size and overlap
-- AST-aware code chunking (heuristic-based, not tree-sitter):
+- **Tree-sitter grammar-based AST chunking** (opt-in via `tree-sitter-*` feature flags):
+  - Python, Java, C#, TypeScript/TSX, JavaScript grammars
+  - Walks AST to collect definition nodes (functions, classes, methods, interfaces)
+  - Recursive descent into oversized compound definitions (e.g. large class → individual method chunks)
+  - Module-level gap code captured as "block" chunks
+  - Falls back to heuristics on unsupported language or parse failure
+  - NOT in `default` features — keeps default builds slim (no C grammar compilation)
+- Heuristic-based AST chunking (fallback, always available):
   - Python: detects def/class/async def by indentation
   - Rust: detects fn/struct/enum/impl/trait by brace counting
   - JavaScript/TypeScript: detects function/class/arrow functions
@@ -610,14 +626,15 @@ Uses `axum::test` helpers or spawns server on a random port.
 
 | Category | Runs in CI | Needs network | Actual count |
 |----------|-----------|---------------|--------------|
-| Unit tests (leann-core src/) | Yes | No | 110 |
+| Unit tests (leann-core src/, default features) | Yes | No | 110 |
+| Unit tests (tree-sitter, `--features tree-sitter`) | Yes | No | 20 |
 | Integration tests (leann-core tests/) | Yes | No | 85 |
 | CLI subprocess tests (leann-cli) | Yes | No | 12 |
 | HTTP server tests (leann-server) | Yes | No | 4 |
 | OpenAI embedding | No (`#[ignore]`) | Yes | 0 (planned) |
 | Ollama embedding | No (`#[ignore]`) | Yes | 0 (planned) |
 | Format compat (Python indexes) | Yes | No | 11 |
-| **Total** | | | **211** (+ 1 ignored doctest) |
+| **Total** | | | **231** (+ 1 ignored doctest) |
 
 ---
 
@@ -632,7 +649,7 @@ Uses `axum::test` helpers or spawns server on a random port.
 
 ### Medium Priority
 6. **CI setup** — GitHub Actions for cargo test, clippy, maturin build (Linux x86_64, macOS ARM64)
-7. **Tree-sitter integration** — Replace heuristic AST chunking with real tree-sitter parsing
+7. ~~**Tree-sitter integration**~~ — DONE: Grammar-based AST chunking for Python, Java, C#, TypeScript/TSX, JavaScript via opt-in `tree-sitter-*` feature flags. 20 tests. Falls back to heuristics when features disabled.
 
 ### Low Priority / Deferred
 10. **Incremental server-side re-indexing** — Server watches corpus directory and auto-rebuilds on file changes (requires incremental HNSW insert/delete or full rebuild; future feature, not port debt)
@@ -659,7 +676,7 @@ Uses `axum::test` helpers or spawns server on a random port.
 
 ## Verification
 
-1. **Unit tests**: 110 passing across leann-core (search_result ×3, settings ×4, index ×4, metadata_filter ×29, passages ×9, bm25 ×14, hnsw/{build ×3, search ×2, graph ×2, csr ×1, io ×1, simd ×12}, chunking/{mod ×2, sentence ×4, ast ×4}, document_loaders/pdf ×3, react_agent ×11, sync ×2). 0 errors, 0 warnings.
+1. **Unit tests**: 130 passing across leann-core (search_result ×3, settings ×4, index ×4, metadata_filter ×29, passages ×9, bm25 ×14, hnsw/{build ×3, search ×2, graph ×2, csr ×1, io ×1, simd ×12}, chunking/{mod ×2, sentence ×4, ast ×4, tree_sitter ×20}, document_loaders/pdf ×3, react_agent ×11, sync ×2). 110 with default features, +20 with `tree-sitter`. 0 errors, 0 warnings.
 2. **CLI conformance**: Rust CLI options aligned with Python CLI (2026-02-19) — verified via `--help` output comparison
 3. **Integration tests**: 85 passing across 9 test files in leann-core. Coverage: core build/search pipeline (11 tests), metadata filtering with all 13 operators via BM25+filter e2e (16 tests), BM25/grep search via LeannSearcher (8 tests), document loading + AST chunking (17 tests), cross-implementation format compatibility (11 tests), file sync/Merkle tree (9 tests), chat/LLM pipeline (5 tests), embedding server manager lifecycle (5 tests), index file format validation (3 tests). All use FakeEmbeddingProvider for deterministic, network-free execution.
 4. **CLI/server tests**: 16 passing — CLI subprocess/help tests (7 in leann-cli), CLI list/remove lifecycle (5 in leann-cli), HTTP server endpoints (4 in leann-server).

@@ -279,6 +279,18 @@ Note: Python's `SimulatedChat` exists (type `"simulated"` in `get_llm`).
 
 ---
 
+## Internal Implementation Parity
+
+These are not part of the PyO3 API surface but affect build-time behavior and output quality.
+
+| Feature | Python | Rust | Status | Notes |
+|---------|--------|------|--------|-------|
+| AST chunking (tree-sitter) | `astchunk` library (tree-sitter) for Python, Java, C#, TS, JS | `chunking/tree_sitter.rs` — same 5 languages via `tree-sitter-*` crates | Compliant | Opt-in via `tree-sitter` feature flag (not in `default`; included in `full`). Falls back to heuristic chunking when disabled. |
+| Heuristic AST chunking | `chunking_utils.py` fallback | `chunking/ast.rs` — Python (indentation), Rust/JS/TS (brace counting) | Compliant | Always available; used when tree-sitter is disabled or for unsupported languages. |
+| Sentence chunking | `llama_index` sentence splitter | `chunking/sentence.rs` — custom sentence splitter | Compliant | |
+
+---
+
 ## Priority Fixes
 
 ### High (blocking cross-read)

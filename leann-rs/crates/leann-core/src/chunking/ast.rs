@@ -30,12 +30,27 @@ pub struct CodeChunk {
     pub metadata: HashMap<String, serde_json::Value>,
 }
 
-/// Chunk source code using a simple AST-like approach.
+/// Chunk source code using AST analysis.
 ///
-/// This uses heuristic-based parsing to identify function/class boundaries
-/// rather than a full AST parser. For a full tree-sitter implementation,
-/// add the tree-sitter crate and language grammars.
+/// When tree-sitter features are enabled, uses grammar-based parsing for
+/// accurate AST boundaries. Falls back to heuristic-based parsing otherwise.
 pub fn chunk_code(source: &str, filename: &str, max_chunk_size: usize) -> Vec<CodeChunk> {
+    #[cfg(any(
+        feature = "tree-sitter-python",
+        feature = "tree-sitter-java",
+        feature = "tree-sitter-c-sharp",
+        feature = "tree-sitter-typescript",
+        feature = "tree-sitter-javascript",
+    ))]
+    if let Some(chunks) =
+        super::tree_sitter::chunk_code_tree_sitter(source, filename, max_chunk_size)
+    {
+        if !chunks.is_empty() {
+            return chunks;
+        }
+    }
+
+    // Heuristic fallback
     let language = detect_language(filename).unwrap_or("unknown");
 
     match language {
@@ -383,7 +398,7 @@ fn extract_rust_name(definition_line: &str) -> String {
     "unknown".to_string()
 }
 
-fn split_large_block(lines: &[&str], max_size: usize) -> Vec<String> {
+pub(crate) fn split_large_block(lines: &[&str], max_size: usize) -> Vec<String> {
     let mut chunks = Vec::new();
     let mut current = String::new();
 
@@ -416,7 +431,7 @@ fn split_large_block(lines: &[&str], max_size: usize) -> Vec<String> {
     chunks
 }
 
-fn make_metadata(
+pub(crate) fn make_metadata(
     filename: &str,
     start_line: usize,
     end_line: usize,

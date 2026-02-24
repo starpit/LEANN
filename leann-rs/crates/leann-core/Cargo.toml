@@ -36,6 +36,14 @@ tiktoken-rs = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
 indicatif = { workspace = true, optional = true }
 
+# Tree-sitter grammar-based AST chunking (opt-in)
+tree-sitter = { workspace = true, optional = true }
+tree-sitter-python = { workspace = true, optional = true }
+tree-sitter-java = { workspace = true, optional = true }
+tree-sitter-c-sharp = { workspace = true, optional = true }
+tree-sitter-typescript = { workspace = true, optional = true }
+tree-sitter-javascript = { workspace = true, optional = true }
+
 [features]
 default = ["chat", "embedding-remote", "embedding-zmq", "parallel", "bm25", "watch", "pdf"]
 
@@ -60,8 +68,26 @@ bm25 = []
 # Merkle-tree incremental sync / file watching
 watch = ["dep:sha2"]
 
+# Tree-sitter AST chunking (Python parity). Enables accurate, grammar-based
+# code chunking. Each language can be enabled individually, or use the umbrella
+# `tree-sitter` feature for all supported languages.
+#
+# To add a new language:
+#   1. Add `tree-sitter-<lang>` to [workspace.dependencies] in root Cargo.toml
+#   2. Add `tree-sitter-<lang> = { workspace = true, optional = true }` to [dependencies] here
+#   3. Add a feature: `tree-sitter-<lang> = ["dep:tree-sitter", "dep:tree-sitter-<lang>"]`
+#   4. Add it to the `tree-sitter` umbrella feature list
+#   5. Add a language entry in `chunking/tree_sitter.rs` with node type queries
+#   6. Map the extension in `chunking/tree_sitter.rs::get_language_config()`
+tree-sitter = ["tree-sitter-python", "tree-sitter-java", "tree-sitter-c-sharp", "tree-sitter-typescript", "tree-sitter-javascript"]
+tree-sitter-python = ["dep:tree-sitter", "dep:tree-sitter-python"]
+tree-sitter-java = ["dep:tree-sitter", "dep:tree-sitter-java"]
+tree-sitter-c-sharp = ["dep:tree-sitter", "dep:tree-sitter-c-sharp"]
+tree-sitter-typescript = ["dep:tree-sitter", "dep:tree-sitter-typescript"]
+tree-sitter-javascript = ["dep:tree-sitter", "dep:tree-sitter-javascript"]
+
 # Everything
-full = ["chat", "embedding-remote", "embedding-zmq", "parallel", "bm25", "watch", "pdf"]
+full = ["chat", "embedding-remote", "embedding-zmq", "parallel", "bm25", "watch", "pdf", "tree-sitter"]
 
 [dev-dependencies]
 tempfile = "3"
