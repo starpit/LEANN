@@ -18,6 +18,7 @@
 //! let results = searcher.search("hello", 5)?;
 //! ```
 
+pub mod backend;
 #[cfg(feature = "bm25")]
 pub(crate) mod bm25;
 pub mod builder;
@@ -39,6 +40,7 @@ pub mod sources_manifest;
 #[cfg(feature = "watch")]
 pub mod sync;
 
+pub use backend::{BackendConfig, BackendIndex};
 pub use builder::LeannBuilder;
 #[cfg(feature = "chat")]
 pub use chat::LeannChat;

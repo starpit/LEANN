@@ -4,11 +4,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use tracing::info;
 
+use crate::backend::{self, BackendConfig};
 use crate::embedding::{EmbeddingMode, EmbeddingProvider};
-use crate::hnsw::build::build_hnsw_with_threads;
-use crate::hnsw::csr::convert_to_csr;
-use crate::hnsw::graph::{HnswConfig, VectorStorage};
-use crate::hnsw::io::{write_hnsw_compact, write_hnsw_standard};
 use crate::hnsw::simd::normalize_l2_inplace;
 use crate::index::{DistanceMetric, IndexMeta, IndexPaths, PassageSource};
 use crate::passages::{Passage, write_id_map, write_passages};
@@ -71,8 +68,7 @@ pub struct LeannBuilder {
     embedding_model: String,
     dimensions: Option<usize>,
     embedding_mode: String,
-    config: HnswConfig,
-    num_threads: usize,
+    backend_config: BackendConfig,
     chunks: Vec<Passage>,
     embedding_options: HashMap<String, serde_json::Value>,
     /// Whether the distance metric was auto-detected (not explicitly set by the user).
@@ -81,7 +77,7 @@ pub struct LeannBuilder {
 
 impl LeannBuilder {
     pub fn new(embedding_model: &str, dimensions: Option<usize>, embedding_mode: &str) -> Self {
-        let mut config = HnswConfig::default();
+        let mut backend_config = BackendConfig::hnsw_default();
         let mut distance_metric_auto = false;
 
         if is_normalized_embeddings_model(embedding_model, embedding_mode) {
@@ -90,7 +86,7 @@ impl LeannBuilder {
                  Auto-setting distance_metric=cosine for optimal performance.",
                 embedding_model, embedding_mode
             );
-            config.distance_metric = DistanceMetric::Cosine;
+            backend_config.set_distance_metric(DistanceMetric::Cosine);
             distance_metric_auto = true;
         }
 
@@ -98,56 +94,53 @@ impl LeannBuilder {
             embedding_model: embedding_model.to_string(),
             dimensions,
             embedding_mode: embedding_mode.to_string(),
-            config,
-            num_threads: std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(1),
+            backend_config,
             chunks: Vec::new(),
             embedding_options: HashMap::new(),
             distance_metric_auto,
         }
     }
 
-    /// Configure HNSW parameters.
-    pub fn with_config(mut self, config: HnswConfig) -> Self {
-        self.config = config;
-        self
+    /// Switch to a different backend (e.g. `"hnsw"`).
+    pub fn with_backend(mut self, name: &str) -> Result<Self> {
+        self.backend_config = BackendConfig::from_name(name)?;
+        Ok(self)
     }
 
     /// Set M parameter (number of bi-directional links).
     pub fn with_m(mut self, m: usize) -> Self {
-        self.config.m = m;
+        self.backend_config.set_m(m);
         self
     }
 
     /// Set efConstruction parameter.
     pub fn with_ef_construction(mut self, ef: usize) -> Self {
-        self.config.ef_construction = ef;
+        self.backend_config.set_ef_construction(ef);
         self
     }
 
     /// Set the distance metric (overrides auto-detection).
     pub fn with_distance_metric(mut self, metric: DistanceMetric) -> Self {
-        self.config.distance_metric = metric;
+        self.backend_config.set_distance_metric(metric);
         self.distance_metric_auto = false;
         self
     }
 
     /// Set compact mode.
     pub fn with_compact(mut self, compact: bool) -> Self {
-        self.config.is_compact = compact;
+        self.backend_config.set_compact(compact);
         self
     }
 
     /// Set recompute mode.
     pub fn with_recompute(mut self, recompute: bool) -> Self {
-        self.config.is_recompute = recompute;
+        self.backend_config.set_recompute(recompute);
         self
     }
 
-    /// Set the number of threads for HNSW construction.
+    /// Set the number of threads for index construction.
     pub fn with_num_threads(mut self, n: usize) -> Self {
-        self.num_threads = n.max(1);
+        self.backend_config.set_num_threads(n);
         self
     }
 
@@ -233,87 +226,20 @@ impl LeannBuilder {
         let mut embeddings = embed_result?;
 
         // Normalize for cosine distance
-        if self.config.distance_metric == DistanceMetric::Cosine {
+        if self.backend_config.distance_metric() == DistanceMetric::Cosine {
             normalize_l2_inplace(&mut embeddings);
         }
 
-        // Build HNSW graph
-        info!(
-            "Building HNSW graph (M={}, efConstruction={})",
-            self.config.m, self.config.ef_construction
-        );
-        let mut graph = build_hnsw_with_threads(&embeddings, &self.config, self.num_threads)?;
-
-        // Store vectors if not using recompute
-        if !self.config.is_recompute {
-            let flat: Vec<f32> = embeddings.iter().copied().collect();
-            // Create FAISS-compatible IndexFlat storage
-            // For now, we store as raw bytes
-            let storage_bytes = flat
-                .iter()
-                .flat_map(|f| f.to_le_bytes())
-                .collect::<Vec<u8>>();
-
-            // FourCC for IndexFlatIP or IndexFlatL2
-            let fourcc = match self.config.distance_metric {
-                DistanceMetric::L2 => u32::from_le_bytes(*b"IxFl"),
-                _ => u32::from_le_bytes(*b"IxFI"),
-            };
-
-            graph.vector_storage = VectorStorage::Raw {
-                fourcc,
-                data: storage_bytes,
-            };
-        }
-
-        // Convert to CSR if compact mode
-        let graph = if self.config.is_compact {
-            info!("Converting to compact CSR format");
-            convert_to_csr(&graph)?
-        } else {
-            graph
-        };
-
-        // Write index file
-        let index_file = paths.index_file_path();
-        let mut file = std::fs::File::create(&index_file)?;
-        if graph.is_compact() {
-            write_hnsw_compact(&mut file, &graph)?;
-        } else {
-            write_hnsw_standard(&mut file, &graph)?;
-        }
+        // Build and write index
+        backend::build_backend(&self.backend_config, &embeddings, &paths.index_file_path())?;
 
         // Write metadata
         let meta = IndexMeta {
             version: "1.0".to_string(),
-            backend_name: "hnsw".to_string(),
+            backend_name: self.backend_config.name().to_string(),
             embedding_model: self.embedding_model.clone(),
             dimensions,
-            backend_kwargs: {
-                let mut kwargs = HashMap::new();
-                kwargs.insert("M".to_string(), serde_json::json!(self.config.m));
-                kwargs.insert(
-                    "efConstruction".to_string(),
-                    serde_json::json!(self.config.ef_construction),
-                );
-                kwargs.insert(
-                    "distance_metric".to_string(),
-                    serde_json::json!(match self.config.distance_metric {
-                        DistanceMetric::L2 => "l2",
-                        DistanceMetric::Cosine => "cosine",
-                        DistanceMetric::Mips => "mips",
-                    }),
-                );
-                kwargs.insert(
-                    "is_compact".to_string(),
-                    serde_json::json!(self.config.is_compact),
-                );
-                kwargs.insert(
-                    "is_recompute".to_string(),
-                    serde_json::json!(self.config.is_recompute),
-                );
-                kwargs
-            },
+            backend_kwargs: self.backend_config.to_backend_kwargs(),
             embedding_mode: self.embedding_mode.clone(),
             passage_sources: vec![PassageSource {
                 source_type: "jsonl".to_string(),
@@ -347,8 +273,8 @@ impl LeannBuilder {
                 ),
             }],
             embedding_options: self.embedding_options.clone(),
-            is_compact: Some(self.config.is_compact),
-            is_pruned: Some(self.config.is_recompute),
+            is_compact: Some(self.backend_config.is_compact()),
+            is_pruned: Some(self.backend_config.is_recompute()),
             total_passages: Some(self.chunks.len()),
             built_from_precomputed_embeddings: None,
             embeddings_source: None,
@@ -397,24 +323,15 @@ impl LeannBuilder {
         write_id_map(ids, &paths.id_map_path())?;
 
         let mut emb = embeddings.to_owned();
-        if self.config.distance_metric == DistanceMetric::Cosine {
+        if self.backend_config.distance_metric() == DistanceMetric::Cosine {
             normalize_l2_inplace(&mut emb);
         }
 
-        let graph = build_hnsw_with_threads(&emb, &self.config, self.num_threads)?;
-
-        if self.config.is_compact {
-            let csr = convert_to_csr(&graph)?;
-            let mut file = std::fs::File::create(paths.index_file_path())?;
-            write_hnsw_compact(&mut file, &csr)?;
-        } else {
-            let mut file = std::fs::File::create(paths.index_file_path())?;
-            write_hnsw_standard(&mut file, &graph)?;
-        }
+        backend::build_backend(&self.backend_config, &emb, &paths.index_file_path())?;
 
         let meta = IndexMeta {
             version: "1.0".to_string(),
-            backend_name: "hnsw".to_string(),
+            backend_name: self.backend_config.name().to_string(),
             embedding_model: self.embedding_model.clone(),
             dimensions,
             backend_kwargs: HashMap::new(),
@@ -437,8 +354,8 @@ impl LeannBuilder {
                 index_path_relative: None,
             }],
             embedding_options: HashMap::new(),
-            is_compact: Some(self.config.is_compact),
-            is_pruned: Some(self.config.is_recompute),
+            is_compact: Some(self.backend_config.is_compact()),
+            is_pruned: Some(self.backend_config.is_recompute()),
             total_passages: Some(self.chunks.len()),
             built_from_precomputed_embeddings: Some(true),
             embeddings_source: None,

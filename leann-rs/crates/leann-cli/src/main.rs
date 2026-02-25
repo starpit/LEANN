@@ -387,6 +387,7 @@ fn main() -> Result<()> {
             cmd_build(BuildArgs {
                 index_name: name,
                 docs,
+                backend_name,
                 embedding_model,
                 embedding_mode,
                 embedding_host,
@@ -533,6 +534,7 @@ fn main() -> Result<()> {
 struct BuildArgs {
     index_name: String,
     docs: Vec<String>,
+    backend_name: String,
     embedding_model: String,
     embedding_mode: String,
     embedding_host: Option<String>,
@@ -677,6 +679,7 @@ fn cmd_build(args: BuildArgs) -> Result<()> {
     let metric = DistanceMetric::default(); // MIPS
 
     let mut builder = LeannBuilder::new(&args.embedding_model, None, &args.embedding_mode)
+        .with_backend(&args.backend_name)?
         .with_m(args.graph_degree)
         .with_ef_construction(args.complexity)
         .with_distance_metric(metric)
@@ -708,7 +711,10 @@ fn cmd_build(args: BuildArgs) -> Result<()> {
     }
 
     println!("Created {} chunks", total_chunks);
-    println!("Building index '{}' with hnsw backend...", args.index_name);
+    println!(
+        "Building index '{}' with {} backend...",
+        args.index_name, args.backend_name
+    );
 
     // Create embedding provider
     let provider = create_embedding_provider(

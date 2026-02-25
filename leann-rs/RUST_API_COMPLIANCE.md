@@ -3,7 +3,7 @@
 Tracks how closely the Rust PyO3 bindings (`crates/leann-python`) match the Python
 `leann.api` module (`packages/leann-core/src/leann/api.py`).
 
-**Last updated:** 2026-02-24
+**Last updated:** 2026-02-25
 
 **Legend:** Compliant | Partial | Non-compliant | N/A
 
@@ -20,14 +20,14 @@ Tracks how closely the Rust PyO3 bindings (`crates/leann-python`) match the Pyth
 | `LeannSearcher` | 16 | 1 | 1 | 18 |
 | `LeannChat` | 9 | 0 | 0 | 9 |
 | `ReActAgent` | 4 | 0 | 0 | 4 |
-| Backend registry | 2 | 0 | 2 | 4 |
+| Backend registry | 4 | 0 | 2 | 6 |
 | Search features | 3 | 0 | 0 | 3 |
 | Metadata filter operators | 13 | 0 | 0 | 13 |
 | `LlmConfig` fields | 5 | 0 | 1 | 6 |
 | On-disk format | 4 | 0 | 1 | 5 |
 | Exception mapping | 3 | 0 | 0 | 3 |
 | Lifecycle / cleanup | 4 | 0 | 0 | 4 |
-| **Total** | **85** | **1** | **7** | **93** |
+| **Total** | **87** | **1** | **7** | **95** |
 
 ---
 
@@ -94,7 +94,7 @@ Python also exports `SearchResult` via the dataclass import path; Rust exposes i
 | Constructor: `index_path` | Required | Required | Compliant | |
 | Constructor: `enable_warmup=True` | Triggers background embedding server startup | Sends probe embedding request via in-process provider | Compliant | Warmup sends a test embedding request to verify provider connectivity; warns on failure. No ZMQ — uses direct provider call. |
 | Constructor: `recompute_embeddings=True` | Controls recompute path at search time | Overrides `meta.json` value via `open_with_options` | Compliant | Passed through `SearcherOptions` to override the meta default. |
-| Constructor: `**backend_kwargs` | Forwarded to backend factory | Accepted; useful kwargs handled via dedicated params | **Partial** | No backend factory abstraction in Rust. Warmup/recompute handled via `SearcherOptions`; search config via `SearchConfig`. Low impact: all useful kwargs are already wired. |
+| Constructor: `**backend_kwargs` | Forwarded to backend factory | Accepted; useful kwargs handled via dedicated params | **Partial** | Backend abstraction exists (`BackendConfig`/`BackendIndex` in `backend.rs`) but searcher kwargs not dispatched through it. Warmup/recompute handled via `SearcherOptions`; search config via `SearchConfig`. Low impact: all useful kwargs are already wired. |
 | `search()` signature | `(query, top_k=5, complexity=64, ...)` — named params | `(query, top_k=5, **kwargs)` — kwargs-based | Compliant | Both accept the same parameter names. |
 | `search()`: `complexity` | Controls candidate list size | Forwarded to `SearchConfig.complexity` | Compliant | |
 | `search()`: `beam_width` | Parallel search paths | Forwarded to `SearchConfig.beam_width` | Compliant | |
@@ -149,10 +149,12 @@ Python also exports `SearchResult` via the dataclass import path; Rust exposes i
 | `autodiscover_backends()` | Scans `leann-backend-*` packages via `importlib.metadata` | Not implemented | **Non-compliant** | N/A with single backend. |
 | `register_backend()` decorator | Registers factory class into `BACKEND_REGISTRY` | Not implemented | **Non-compliant** | N/A with single backend. |
 | `get_registered_backends()` | Reads `BACKEND_REGISTRY.keys()` | Returns `["hnsw"]` | Compliant | Functional parity via hardcoded list. |
+| Backend dispatch | Factory class per backend | `BackendConfig`/`BackendIndex` enums in `backend.rs` | Compliant | Enum dispatch matches Python's factory pattern. Adding a backend = adding an enum variant (no trait hierarchy needed). |
+| `LeannBuilder` backend selection | `backend_name` → factory lookup | `with_backend(name)` → `BackendConfig::from_name()` | Compliant | Validates backend name and creates default config. |
 
 `register_project_directory()` is a CLI convenience in Python (`registry.py`) for `leann list` discovery. Not part of the core search API.
 
-Python's `interface.py` defines ABCs (`LeannBackendFactoryInterface`, `LeannBackendBuilderInterface`, `LeannBackendSearcherInterface`) that any backend must implement. Rust has no equivalent trait hierarchy — the HNSW implementation is called directly.
+Python's `interface.py` defines ABCs (`LeannBackendFactoryInterface`, `LeannBackendBuilderInterface`, `LeannBackendSearcherInterface`) that any backend must implement. Rust uses enum-based dispatch in `backend.rs` instead — `BackendConfig` and `BackendIndex` enums with match arms for each backend. Adding a new backend means adding an enum variant and implementing the match arms in `build_backend`, `read_backend_index`, `search_backend`, and `search_backend_recompute`.
 
 ---
 
@@ -276,9 +278,9 @@ Note: The ZMQ embedding server/client (`client.rs`, `server.rs`) and `embedding-
 
 | Backend | Python | Rust | Status |
 |---------|--------|------|--------|
-| HNSW (FAISS C++ fork) | Full support | Pure-Rust HNSW (SIMD-optimized) | Compliant |
-| IVF (FAISS IndexIVFFlat) | Full support (commit 5b82603) | Not implemented | N/A |
-| DiskANN | Full support | Not implemented | N/A |
+| HNSW (FAISS C++ fork) | Full support | Pure-Rust HNSW (SIMD-optimized) via `BackendConfig::Hnsw` / `BackendIndex::Hnsw` | Compliant |
+| IVF (FAISS IndexIVFFlat) | Full support (commit 5b82603) | Not implemented (backend abstraction ready for new enum variant) | N/A |
+| DiskANN | Full support | Not implemented (backend abstraction ready for new enum variant) | N/A |
 
 ---
 

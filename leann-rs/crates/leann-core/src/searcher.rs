@@ -1,17 +1,15 @@
 use anyhow::Result;
 use std::collections::HashMap;
-use std::io::Cursor;
 use std::path::Path;
 use std::sync::Arc;
 
 use tracing::warn;
 
+use crate::backend::{self, BackendIndex, PruningStrategy};
 #[cfg(feature = "bm25")]
 use crate::bm25::BM25Scorer;
 use crate::embedding::EmbeddingProvider;
-use crate::hnsw::graph::HnswGraph;
-use crate::hnsw::io::read_hnsw_index;
-use crate::hnsw::search::{PruningStrategy, SearchParams, search_hnsw, search_hnsw_recompute};
+use crate::hnsw::search::SearchParams;
 use crate::hnsw::simd::{inner_product_distance, l2_distance};
 use crate::index::{DistanceMetric, IndexMeta, IndexPaths};
 #[cfg(feature = "bm25")]
@@ -33,7 +31,7 @@ pub struct SearcherOptions {
 pub struct LeannSearcher {
     meta: IndexMeta,
     passages: PassageManager,
-    graph: HnswGraph,
+    index: BackendIndex,
     id_map: Vec<String>,
     distance_metric: DistanceMetric,
     recompute_embeddings: bool,
@@ -66,14 +64,12 @@ impl LeannSearcher {
         // Load passages
         let passages = PassageManager::load(&meta.passage_sources, Some(&meta_path))?;
 
-        // Load HNSW graph
+        // Load backend index
         let index_file = paths.index_file_path();
         if !index_file.exists() {
-            anyhow::bail!("HNSW index file not found at {}", index_file.display());
+            anyhow::bail!("Index file not found at {}", index_file.display());
         }
-        let index_data = std::fs::read(&index_file)?;
-        let mut cursor = Cursor::new(index_data);
-        let graph = read_hnsw_index(&mut cursor)?;
+        let index = backend::read_backend_index(&meta.backend_name, &index_file)?;
 
         // Load ID map
         let id_map_path = paths.id_map_path();
@@ -89,7 +85,7 @@ impl LeannSearcher {
         Ok(Self {
             meta,
             passages,
-            graph,
+            index,
             id_map,
             distance_metric,
             recompute_embeddings: recompute,
@@ -248,19 +244,18 @@ impl LeannSearcher {
         };
 
         // Search
-        let (labels, distances) = if self.recompute_embeddings {
+        let (labels, distances) = if self.recompute_embeddings || self.index.is_pruned() {
             // Recompute: look up passage texts, compute embeddings, compute distances locally
             let provider = Arc::clone(provider);
             let passages = &self.passages;
             let distance_metric = self.distance_metric;
 
-            search_hnsw_recompute(
-                &self.graph,
+            backend::search_backend_recompute(
+                &self.index,
                 &query_vec,
                 top_k,
                 &params,
                 |node_ids, q, out| {
-                    // Look up texts for each node ID
                     let mut texts = Vec::new();
                     let mut found_indices = Vec::new();
 
@@ -273,7 +268,6 @@ impl LeannSearcher {
                         }
                     }
 
-                    // Default to large distance for unfound passages
                     for d in out.iter_mut().take(node_ids.len()) {
                         *d = 1e9;
                     }
@@ -297,61 +291,7 @@ impl LeannSearcher {
             )
         } else {
             // Non-recompute: use stored vectors
-            match &self.graph.vector_storage {
-                crate::hnsw::graph::VectorStorage::Raw { data, .. } => {
-                    let flat_vectors: Vec<f32> = data
-                        .chunks_exact(4)
-                        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-                        .collect();
-                    search_hnsw(&self.graph, &query_vec, top_k, &flat_vectors, &params)
-                }
-                _ => {
-                    // No stored vectors — fall back to recompute via provider
-                    let provider = Arc::clone(provider);
-                    let passages = &self.passages;
-                    let distance_metric = self.distance_metric;
-
-                    search_hnsw_recompute(
-                        &self.graph,
-                        &query_vec,
-                        top_k,
-                        &params,
-                        |node_ids, q, out| {
-                            let mut texts = Vec::new();
-                            let mut found_indices = Vec::new();
-
-                            for (idx, &nid) in node_ids.iter().enumerate() {
-                                if let Ok(passage) = passages.get_passage_by_index(nid)
-                                    && !passage.text.is_empty()
-                                {
-                                    texts.push(passage.text);
-                                    found_indices.push(idx);
-                                }
-                            }
-
-                            for d in out.iter_mut().take(node_ids.len()) {
-                                *d = 1e9;
-                            }
-
-                            if texts.is_empty() {
-                                return;
-                            }
-
-                            if let Ok(embeddings) = provider.compute_embeddings(&texts) {
-                                for (i, &original_idx) in found_indices.iter().enumerate() {
-                                    let emb = embeddings.row(i);
-                                    let emb_slice = emb.as_slice().unwrap();
-                                    let dist = match distance_metric {
-                                        DistanceMetric::L2 => l2_distance(q, emb_slice),
-                                        _ => inner_product_distance(q, emb_slice),
-                                    };
-                                    out[original_idx] = dist;
-                                }
-                            }
-                        },
-                    )
-                }
-            }
+            backend::search_backend(&self.index, &query_vec, top_k, &params)
         };
 
         // Map labels to passages and enrich results

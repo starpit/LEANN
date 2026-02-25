@@ -288,15 +288,10 @@ impl LeannBuilder {
         embedding_options: Option<&Bound<'_, PyDict>>,
         kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Self> {
-        if backend_name != "hnsw" {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "Backend '{}' is not supported in the Rust implementation. Only 'hnsw' is available.",
-                backend_name
-            )));
-        }
-
         let mut builder =
-            leann_core::LeannBuilder::new(embedding_model, dimensions, embedding_mode);
+            leann_core::LeannBuilder::new(embedding_model, dimensions, embedding_mode)
+                .with_backend(backend_name)
+                .map_err(anyhow_to_pyerr)?;
 
         if let Some(opts) = embedding_options {
             builder = builder.with_embedding_options(py_dict_to_metadata(opts));

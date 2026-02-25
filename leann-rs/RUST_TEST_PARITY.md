@@ -2,7 +2,7 @@
 
 Comparison of Python test coverage (`tests/`) with Rust test coverage (`crates/leann-core/`, `crates/leann-cli/`, `crates/leann-server/`).
 
-**Rust totals: 261 tests (117 unit + 20 tree-sitter + 100 leann-core integration + 22 leann-cli + 4 leann-server), 0 failures.**
+**Rust totals: 295 tests (122 unit + 20 tree-sitter + 116 leann-core integration + 22 leann-cli + 4 leann-server), 0 failures.**
 
 ## Core Feature Tests
 
@@ -128,6 +128,7 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 | Test File | Tests | Description |
 |---|---|---|
 | `test_build_search.rs` | 12 | Core pipeline: build → search → verify (incl. provider-based) |
+| `test_backend.rs` | 16 | Backend abstraction: config, dispatch, builder integration, error paths |
 | `test_search_with_provider.rs` | 7 | Provider-based search, warmup, factory dispatch |
 | `test_metadata_filtering.rs` | 16 | All 13 filter operators via BM25 search + filter e2e |
 | `test_hybrid_search.rs` | 8 | BM25 + grep search, metadata filters |
@@ -138,7 +139,7 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 | `test_embedding_manager.rs` | 5 | EmbeddingServerManager lifecycle |
 | `test_fuzz_io.rs` | 8 | Fuzz-style HNSW I/O: random bytes, all-zeros, all-ones, header+garbage, bitflips, roundtrip standard/compact, ambiguous counts |
 | `test_index_format.rs` | 3 | Index meta schema validation |
-| **Subtotal** | **100** | |
+| **Subtotal** | **116** | |
 
 ### CLI Tests (leann-cli)
 
@@ -161,6 +162,7 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 
 | Module | Tests | Description |
 |---|---|---|
+| `backend.rs` | 5 | BackendConfig creation, setters, kwargs serialization, read error path |
 | `bm25.rs` | 15 | BM25 scorer: fit, search, tokenize, edge cases, large corpus |
 | `metadata_filter.rs` | 22 | All operators, compound logic, edge cases, sample results |
 | `hnsw/simd.rs` | 12 | L2/IP distance, batch_4, VisitedList, normalize |
@@ -182,7 +184,7 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 | `document_loaders/pdf.rs` | 3 | PDF extraction |
 | `searcher.rs` | 1 | SearcherOptions default |
 | `sources_manifest.rs` | 5 | Save/load roundtrip, missing file, invalid JSON, collect_sources real files, nonexistent file |
-| **Subtotal** | **137** (117 default + 20 tree-sitter) | |
+| **Subtotal** | **142** (122 default + 20 tree-sitter) | |
 
 ---
 
@@ -210,6 +212,7 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 | Category | Python Tests | Rust Tests | Parity |
 |---|---|---|---|
 | Build & Search | 3 | 12 | Rust exceeds |
+| Backend Abstraction | — | 16 integration + 5 unit | Rust-only (config, dispatch, error paths) |
 | Provider-based Search | — | 7 | Rust-only (provider wiring, warmup, factory) |
 | Metadata Filtering | 26 | 16 integration + 22 unit | Fully covered |
 | Hybrid Search (BM25) | 7 | 8 | BM25/grep covered; blend requires provider |
@@ -227,7 +230,7 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 | ReAct Agent | — | 11 unit | Rust-only |
 | HTTP Server | — | 4 | Rust-only |
 | Python-specific | 55+ | — | Not applicable |
-| **Total** | | **263** | |
+| **Total** | | **295** | |
 
 ---
 
