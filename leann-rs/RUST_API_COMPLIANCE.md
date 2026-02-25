@@ -76,7 +76,7 @@ Python also exports `SearchResult` via the dataclass import path; Rust exposes i
 | `add_text(text, metadata=None)` | Appends chunk | Appends chunk | Compliant | |
 | `build_index(index_path)` | Uses configured `embedding_mode` (sentence-transformers, mlx, openai, gemini) | Dispatches on `embedding_mode` via `create_embedding_provider()` | Compliant | Supports ollama, openai, gemini. Sentence-transformers falls back to OpenAI/Ollama (ZMQ removed). MLX not ported (N/A). |
 | `build_index_from_embeddings` | `(index_path, embeddings_file)` — pickle path | `(index_path, ids, embeddings)` — direct data | **Non-compliant** | Different signatures. Rust takes IDs + embedding lists directly; Python takes a path to a pickle file containing `(ids, embeddings)` tuple. |
-| `update_index(index_path)` | Appends passages + vectors to existing index | Not implemented | **Non-compliant** | Incremental update not yet ported to Rust. |
+| `update_index(index_path)` | Appends passages + vectors to existing index | Not implemented | **Non-compliant** | Incremental update not yet ported to Rust. CLI uses sources manifest + full rebuild as workaround. Python IVF path also accepts `remove_passage_ids` parameter (Python-only). |
 | Backend kwarg: `M` | Forwarded to HNSW builder | Extracted and applied | Compliant | |
 | Backend kwarg: `efConstruction` | Forwarded to HNSW builder | Extracted and applied | Compliant | |
 | Backend kwarg: `is_compact` | Forwarded to HNSW builder | Extracted and applied | Compliant | |
@@ -277,6 +277,7 @@ Note: The ZMQ embedding server/client (`client.rs`, `server.rs`) and `embedding-
 | Backend | Python | Rust | Status |
 |---------|--------|------|--------|
 | HNSW (FAISS C++ fork) | Full support | Pure-Rust HNSW (SIMD-optimized) | Compliant |
+| IVF (FAISS IndexIVFFlat) | Full support (commit 5b82603) | Not implemented | N/A |
 | DiskANN | Full support | Not implemented | N/A |
 
 ---
@@ -319,6 +320,7 @@ These are not part of the PyO3 API surface but affect build-time behavior and ou
 11. ~~**`start_interactive()`**~~ — Resolved: stdin REPL loop on `LeannChat`, exits on "quit"/"exit"/EOF.
 12. ~~**`ReActAgent.search()`**~~ — Resolved: exposed as PyO3 method, delegates to `LeannSearcher.search()`.
 13. **`build_index_from_embeddings` pickle overload** — Accept a pickle file path in addition to direct data.
+14. **IVF backend** — Python added IVF (FAISS IndexIVFFlat) in commit 5b82603. Not planned for Rust (same priority as DiskANN).
 14. ~~**Normalized-embedding auto-detection**~~ — Resolved: `is_normalized_embeddings_model()` in `builder.rs` checks known models + patterns, auto-sets cosine distance.
 15. ~~**`create_react_agent()` convenience function**~~ — Resolved: exposed as `#[pyfunction]` with matching signature.
 

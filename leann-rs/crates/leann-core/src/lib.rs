@@ -35,6 +35,7 @@ pub mod react_agent;
 pub mod search_result;
 pub mod searcher;
 pub(crate) mod settings;
+pub mod sources_manifest;
 #[cfg(feature = "watch")]
 pub mod sync;
 

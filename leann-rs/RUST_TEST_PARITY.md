@@ -2,7 +2,7 @@
 
 Comparison of Python test coverage (`tests/`) with Rust test coverage (`crates/leann-core/`, `crates/leann-cli/`, `crates/leann-server/`).
 
-**Rust totals: 251 tests (112 unit + 20 tree-sitter + 100 leann-core integration + 16 leann-cli + 4 leann-server), 0 failures.**
+**Rust totals: 261 tests (117 unit + 20 tree-sitter + 100 leann-core integration + 22 leann-cli + 4 leann-server), 0 failures.**
 
 ## Core Feature Tests
 
@@ -105,7 +105,7 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 
 ### test_ci_minimal.py / test_cli_ask.py / test_cli_verbosity.py — CLI
 
-**Status: Covered where applicable.** 7 CLI args tests + 5 CLI list/remove lifecycle tests = 12 total in leann-cli. C++ output suppression tests are Python/FAISS-specific (not applicable).
+**Status: Covered where applicable.** 10 CLI args tests + 6 incremental build tests + 5 CLI list/remove lifecycle tests = 21 total in leann-cli. C++ output suppression tests are Python/FAISS-specific (not applicable).
 
 ---
 
@@ -145,9 +145,10 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 | Test File | Tests | Description |
 |---|---|---|
 | `test_cli_args.rs` | 10 | Subcommand help, version, argument parsing, warmup command, search warmup flags |
+| `test_cli_incremental.rs` | 6 | Incremental build: pre-incremental index, up-to-date, new file detection, --force bypass, new index, help text |
 | `test_cli_list_remove.rs` | 5 | List + remove lifecycle via subprocess |
 | (leann-cli also runs 1 test from leann-server fixture) | | |
-| **Subtotal** | **16** | |
+| **Subtotal** | **22** | |
 
 ### Server Tests (leann-server)
 
@@ -180,7 +181,8 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 | `sync.rs` | 2 | Hash data, Merkle tree |
 | `document_loaders/pdf.rs` | 3 | PDF extraction |
 | `searcher.rs` | 1 | SearcherOptions default |
-| **Subtotal** | **132** (112 default + 20 tree-sitter) | |
+| `sources_manifest.rs` | 5 | Save/load roundtrip, missing file, invalid JSON, collect_sources real files, nonexistent file |
+| **Subtotal** | **137** (117 default + 20 tree-sitter) | |
 
 ---
 
@@ -214,7 +216,7 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 | Sync | 5 | 9 | Rust exceeds |
 | AST Chunking / Doc Loading | 20+ | 17 integration + 20 tree-sitter unit | Fully covered (tree-sitter parity) |
 | CI Smoke Tests | 4 | 5 | Fully covered |
-| CLI Args & Lifecycle | 12 | 16 | Rust exceeds (warmup command + flags) |
+| CLI Args & Lifecycle | 12 | 22 | Rust exceeds (warmup, incremental build) |
 | Embedding Manager | 5 | 5 | Partially covered (no server start) |
 | BM25 Scorer | — | 15 unit | Rust-only |
 | Index Format | — | 3 | Rust-only |
@@ -225,7 +227,7 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 | ReAct Agent | — | 11 unit | Rust-only |
 | HTTP Server | — | 4 | Rust-only |
 | Python-specific | 55+ | — | Not applicable |
-| **Total** | | **252** | |
+| **Total** | | **263** | |
 
 ---
 

@@ -67,7 +67,7 @@ enum Commands {
         #[arg(long)]
         query_prompt_template: Option<String>,
 
-        /// Force rebuild existing index
+        /// Force full rebuild of existing index (without this, build is incremental: adds new files only)
         #[arg(long, short = 'f')]
         force: bool,
 
@@ -561,16 +561,23 @@ fn cmd_build(args: BuildArgs) -> Result<()> {
     use leann_core::chunking;
     use leann_core::embedding::EmbeddingMode;
     use leann_core::index::DistanceMetric;
+    use leann_core::sources_manifest;
 
     let index_dir = indexes_dir().join(&args.index_name);
     let index_path = get_index_path(&args.index_name);
 
-    if index_exists(&args.index_name) && !args.force {
-        println!(
-            "Index '{}' already exists. Use --force to rebuild.",
-            args.index_name
-        );
-        return Ok(());
+    // Incremental build detection
+    let existing = index_exists(&args.index_name);
+    if existing && !args.force {
+        let manifest = sources_manifest::load_sources_manifest(&index_dir)?;
+        if manifest.is_empty() {
+            println!(
+                "Index '{}' was built before incremental support. Use --force to rebuild.",
+                args.index_name
+            );
+            return Ok(());
+        }
+        // Fall through to incremental path — we'll compare after loading docs
     }
 
     // Classify docs paths (use !is_dir for files to support named pipes/fifos
@@ -647,6 +654,25 @@ fn cmd_build(args: BuildArgs) -> Result<()> {
         anyhow::bail!("No documents found");
     }
 
+    // Incremental: check for new files vs manifest
+    if existing && !args.force {
+        let manifest = sources_manifest::load_sources_manifest(&index_dir)?;
+        let current_sources = sources_manifest::collect_sources(&documents);
+        let new_files: Vec<&String> = current_sources
+            .keys()
+            .filter(|k| !manifest.contains_key(k.as_str()))
+            .collect();
+        if new_files.is_empty() {
+            println!("Index '{}' is up to date.", args.index_name);
+            return Ok(());
+        }
+        println!(
+            "Updating index '{}' with {} new file(s)... (full rebuild)",
+            args.index_name,
+            new_files.len()
+        );
+    }
+
     let mode = EmbeddingMode::from_str_lossy(&args.embedding_mode);
     let metric = DistanceMetric::default(); // MIPS
 
@@ -695,6 +721,10 @@ fn cmd_build(args: BuildArgs) -> Result<()> {
 
     std::fs::create_dir_all(&index_dir)?;
     builder.build_index(&index_path, provider.as_ref())?;
+
+    // Save sources manifest for future incremental builds
+    let sources = sources_manifest::collect_sources(&documents);
+    sources_manifest::save_sources_manifest(&index_dir, &sources)?;
 
     println!("Index built at {}", index_path.display());
     Ok(())

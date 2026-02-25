@@ -230,16 +230,15 @@ pub fn read_hnsw_index<R: Read + Seek>(reader: &mut R) -> Result<HnswGraph> {
         reader.seek(SeekFrom::Start(pos_standard))?;
 
         // For a valid standard HNSW, offsets has ntotal or ntotal+1 entries.
-        let plausible = offsets_count_raw == ntotal as u64
-            || offsets_count_raw == (ntotal + 1) as u64;
+        let plausible =
+            offsets_count_raw == ntotal as u64 || offsets_count_raw == (ntotal + 1) as u64;
 
         if !plausible {
             // Try skipping one padding byte.
             let alt_pos = pos_standard + 1;
             reader.seek(SeekFrom::Start(alt_pos))?;
             let alt_count: u64 = read_le(reader)?;
-            let alt_plausible =
-                alt_count == ntotal as u64 || alt_count == (ntotal + 1) as u64;
+            let alt_plausible = alt_count == ntotal as u64 || alt_count == (ntotal + 1) as u64;
             if alt_plausible {
                 reader.seek(SeekFrom::Start(alt_pos))?;
             } else {

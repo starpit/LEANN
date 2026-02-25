@@ -233,9 +233,15 @@ fn fuzz_roundtrip_standard() {
         let mut cursor = Cursor::new(&buf);
         let loaded = read_hnsw_index(&mut cursor).unwrap();
 
-        assert_eq!(loaded.ntotal, ntotal, "ntotal mismatch for n={ntotal} m={m}");
+        assert_eq!(
+            loaded.ntotal, ntotal,
+            "ntotal mismatch for n={ntotal} m={m}"
+        );
         assert_eq!(loaded.dimensions, dim);
-        assert!(!loaded.is_compact(), "n={ntotal} m={m}: detected as compact");
+        assert!(
+            !loaded.is_compact(),
+            "n={ntotal} m={m}: detected as compact"
+        );
     }
 }
 
@@ -260,9 +266,15 @@ fn fuzz_roundtrip_compact() {
         let mut cursor = Cursor::new(&buf);
         let loaded = read_hnsw_index(&mut cursor).unwrap();
 
-        assert_eq!(loaded.ntotal, ntotal, "ntotal mismatch for n={ntotal} m={m}");
+        assert_eq!(
+            loaded.ntotal, ntotal,
+            "ntotal mismatch for n={ntotal} m={m}"
+        );
         assert_eq!(loaded.dimensions, dim);
-        assert!(loaded.is_compact(), "n={ntotal} m={m}: detected as standard");
+        assert!(
+            loaded.is_compact(),
+            "n={ntotal} m={m}: detected as standard"
+        );
     }
 }
 
