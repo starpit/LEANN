@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::mem::size_of;
 
 use super::graph::*;
 
@@ -23,17 +24,18 @@ fn write_le<T: Copy, W: Write>(writer: &mut W, val: T) -> Result<()> {
 }
 
 /// Read a vector: 8-byte count (u64) followed by count elements.
-fn read_vec<T: Copy + Default, R: Read>(reader: &mut R) -> Result<Vec<T>> {
+fn read_vec<T: Copy + Default, R: Read + Seek>(reader: &mut R) -> Result<Vec<T>> {
+    let offset = reader.stream_position().unwrap_or(u64::MAX);
     let count: u64 = read_le(reader)?;
     let count = count as usize;
     if count == 0 {
         return Ok(Vec::new());
     }
-    let elem_size = std::mem::size_of::<T>();
+    let elem_size = size_of::<T>();
     let total_bytes = count.checked_mul(elem_size).with_context(|| {
         format!(
-            "vector size overflow: {} elements x {} bytes/elem exceeds usize",
-            count, elem_size
+            "vector size overflow at file offset {}: {} elements x {} bytes/elem exceeds usize",
+            offset, count, elem_size
         )
     })?;
     // Cap allocation at 4 GB — any legitimate HNSW index stays well
@@ -41,7 +43,8 @@ fn read_vec<T: Copy + Default, R: Read>(reader: &mut R) -> Result<Vec<T>> {
     const MAX_ALLOC: usize = 4 << 30;
     if total_bytes > MAX_ALLOC {
         anyhow::bail!(
-            "vector allocation too large: {} bytes ({} elements x {} bytes/elem)",
+            "vector allocation too large at file offset {}: {} bytes ({} elements x {} bytes/elem)",
+            offset,
             total_bytes,
             count,
             elem_size
@@ -53,8 +56,8 @@ fn read_vec<T: Copy + Default, R: Read>(reader: &mut R) -> Result<Vec<T>> {
         unsafe { std::slice::from_raw_parts_mut(result.as_mut_ptr() as *mut u8, total_bytes) };
     reader.read_exact(byte_slice).with_context(|| {
         format!(
-            "reading vector: expected {} bytes ({} elements)",
-            total_bytes, count
+            "reading vector at file offset {}: expected {} bytes ({} elements)",
+            offset, total_bytes, count
         )
     })?;
     Ok(result)
