@@ -1,10 +1,10 @@
 # LEANN Rust Port Plan
 
-> **Rust port currently based on Python commit [`1da64a9`](https://github.com/nickmccarty/LEANN/commit/1da64a9) (`main` as of 2026-02-20).** When updating the Rust code to match future Python changes, diff from this commit forward.
+> **Rust port currently based on Python commit [`c77fa9e`](https://github.com/nickmccarty/LEANN/commit/c77fa9e) (`main` as of 2026-02-25).** When updating the Rust code to match future Python changes, diff from this commit forward.
 
-## Current Status (2026-02-24)
+## Current Status (2026-02-25)
 
-**~13,000 lines of Rust across 4 crates. 243 Rust tests passing (111 unit + 20 tree-sitter + 92 integration + 20 CLI/server) + 34 Python binding tests. 0 errors, 0 warnings.**
+**~13,000 lines of Rust across 4 crates. 263 Rust tests passing (117 unit + 20 tree-sitter + 100 integration + 22 CLI + 4 server) + 34 Python binding tests. 0 errors, 0 warnings.**
 
 All 8 phases of the initial implementation are complete. Since then, major HNSW performance work has been done: SIMD-optimized distance functions (NEON/AVX2), batch-4 distance computation, parallel build with rayon thread pools, flat heaps for cache locality, early termination, prefetching in hot paths, `SearchBuffers` for heap/visited-list reuse, and a `VisitedList` with generation-counter reset. The pure-Rust HNSW engine now matches or approaches FAISS C++ performance. Criterion benchmark suite and Rust-vs-Python comparison scripts validate this.
 
@@ -18,8 +18,8 @@ What remains is hardening: ONNX Runtime activation, Python example porting, and 
 
 | Crate | LOC | Status |
 |-------|-----|--------|
-| `leann-core` | 11,019 | Complete - all modules implemented with 131 unit tests (111 default + 20 tree-sitter); extensive HNSW optimization; modular feature flags; in-process embedding providers |
-| `leann-cli` | 1,450 | Complete - all 9 commands wired up (build/search/ask/react/list/remove/watch/serve/warmup), aligned with Python CLI |
+| `leann-core` | 11,200 | Complete - all modules implemented with 137 unit tests (117 default + 20 tree-sitter); extensive HNSW optimization; modular feature flags; in-process embedding providers; sources manifest |
+| `leann-cli` | 1,500 | Complete - all 9 commands wired up (build/search/ask/react/list/remove/watch/serve/warmup), aligned with Python CLI; incremental build support |
 | `leann-server` | 223 | Complete - all endpoints functional with state management |
 | `leann-python` | 736 | Complete - PyO3 0.25, maturin build tested, 34 Python tests, `.pyi` stubs, search kwargs wired |
 
@@ -35,6 +35,7 @@ leann-rs/
     leann-core/src/
       lib.rs                    (47)  # Module declarations + re-exports + feature-gated modules
       search_result.rs          (72)  # SearchResult struct [3 tests]
+      sources_manifest.rs      (150)  # Incremental build sources tracking [5 tests]
       settings.rs              (149)  # Env var resolution [4 tests]
       index.rs                 (247)  # IndexMeta, IndexPaths, DistanceMetric [4 tests]
       metadata_filter.rs       (714)  # 13 operators, AND logic [29 tests]
@@ -307,7 +308,7 @@ PyO3 0.25 used for leann-python (standalone crate, Python 3.14 compatible).
 ## Phase 6: CLI (`leann-cli`) [COMPLETE]
 
 ### All commands implemented (aligned with Python CLI):
-- `leann build [name] --docs <path>...` — Full pipeline: recursive document loading (30+ file extensions), sentence chunking with configurable size/overlap, embedding computation, HNSW build. Supports both files and directories via `--docs`.
+- `leann build [name] --docs <path>...` — Full pipeline: recursive document loading (30+ file extensions), sentence chunking with configurable size/overlap, embedding computation, HNSW build. Supports both files and directories via `--docs`. Incremental build via sources manifest (full rebuild on new files, `--force` for full rebuild).
 - `leann search <name> <query>` — Vector search with configurable complexity, `--show-metadata`, `--embedding-prompt-template`, `--warmup/--no-warmup`
 - `leann ask <name> [question]` — Single-shot RAG Q&A with `--thinking-budget` support
 - `leann ask <name> --interactive` — Interactive REPL mode
@@ -398,7 +399,7 @@ Maps the Python test suite (`tests/test_*.py`) to equivalent Rust integration te
 ### Test File Layout
 
 ```
-crates/leann-core/tests/         # 92 integration tests
+crates/leann-core/tests/         # 100 integration tests
   common/mod.rs              # ✅ Shared helpers: FakeEmbeddingProvider, temp_dir, sample docs
   test_build_search.rs       # ✅ 12 tests — Core pipeline: build → search → verify (incl. provider-based)
   test_search_with_provider.rs # ✅ 7 tests — Provider-based search, warmup, factory dispatch
@@ -411,8 +412,9 @@ crates/leann-core/tests/         # 92 integration tests
   test_embedding_manager.rs  # ✅ 5 tests — EmbeddingServerManager lifecycle
   test_index_format.rs       # ✅ 3 tests — Index meta schema, distance metric, recompute flag
 
-crates/leann-cli/tests/          # 16 tests
+crates/leann-cli/tests/          # 22 tests
   test_cli_args.rs           # ✅ 10 tests — Help output, version, argument parsing, warmup flags
+  test_cli_incremental.rs    # ✅ 6 tests — Incremental build: pre-incremental index, up-to-date, new file detection, --force bypass
   test_cli_list_remove.rs    # ✅ 5 tests — List + remove lifecycle via subprocess
   (note: 1 skipped in leann-server for unrelated fixture)
 
@@ -635,15 +637,15 @@ Uses `axum::test` helpers or spawns server on a random port.
 
 | Category | Runs in CI | Needs network | Actual count |
 |----------|-----------|---------------|--------------|
-| Unit tests (leann-core src/, default features) | Yes | No | 111 |
+| Unit tests (leann-core src/, default features) | Yes | No | 117 |
 | Unit tests (tree-sitter, `--features tree-sitter`) | Yes | No | 20 |
-| Integration tests (leann-core tests/) | Yes | No | 92 |
-| CLI subprocess tests (leann-cli) | Yes | No | 16 |
+| Integration tests (leann-core tests/) | Yes | No | 100 |
+| CLI subprocess tests (leann-cli) | Yes | No | 22 |
 | HTTP server tests (leann-server) | Yes | No | 4 |
 | OpenAI embedding | No (`#[ignore]`) | Yes | 0 (planned) |
 | Ollama embedding | No (`#[ignore]`) | Yes | 0 (planned) |
 | Format compat (Python indexes) | Yes | No | 11 |
-| **Total** | | | **243** (+ 1 ignored doctest) |
+| **Total** | | | **263** (+ 1 ignored doctest) |
 
 ---
 
@@ -661,8 +663,9 @@ Uses `axum::test` helpers or spawns server on a random port.
 7. ~~**Tree-sitter integration**~~ — DONE: Grammar-based AST chunking for Python, Java, C#, TypeScript/TSX, JavaScript via opt-in `tree-sitter-*` feature flags. 20 tests. Falls back to heuristics when features disabled.
 
 ### Low Priority / Deferred
-10. **Incremental server-side re-indexing** — Server watches corpus directory and auto-rebuilds on file changes (requires incremental HNSW insert/delete or full rebuild; future feature, not port debt)
+10. **Incremental HNSW insertion** — CLI incremental build uses sources manifest for new-file detection but does full graph rebuild. True incremental `update_index()` (like Python's FAISS `index.add()`) would avoid rebuilding the graph. Port debt from Python commit `5b82603`.
 11. **DiskANN backend** — Deferred per plan; HNSW-only for now
+16. **IVF backend** — Python added IVF (FAISS IndexIVFFlat) in commit `5b82603`. Not planned for Rust (same priority as DiskANN).
 12. ~~**Format compatibility tests**~~ — DONE: 11 tests in `test_python_compat.rs`. Known gap: `.passages.idx` format incompatible (pickle vs text). See [RUST_API_COMPLIANCE.md](RUST_API_COMPLIANCE.md)
 13. ~~**Recall benchmarks**~~ — DONE: Criterion benchmark suite + Rust vs Python comparison at `benchmarks/` (distance, build, search, recompute, full pipeline, index size). HNSW performance optimization complete: SIMD (NEON/AVX2), batch-4 distance, parallel build, flat heaps, visited list, early termination.
 14. **MLX embedding provider** — Apple Silicon specific; defer
@@ -685,10 +688,10 @@ Uses `axum::test` helpers or spawns server on a random port.
 
 ## Verification
 
-1. **Unit tests**: 131 passing across leann-core (search_result ×3, settings ×4, index ×4, metadata_filter ×29, passages ×9, bm25 ×14, hnsw/{build ×3, search ×2, graph ×2, csr ×1, io ×1, simd ×12}, chunking/{mod ×2, sentence ×4, ast ×4, tree_sitter ×20}, document_loaders/pdf ×3, react_agent ×11, sync ×2, searcher ×1). 111 with default features, +20 with `tree-sitter`. 0 errors, 0 warnings.
+1. **Unit tests**: 137 passing across leann-core (search_result ×3, settings ×4, index ×4, metadata_filter ×29, passages ×9, bm25 ×14, hnsw/{build ×3, search ×2, graph ×2, csr ×1, io ×1, simd ×12}, chunking/{mod ×2, sentence ×4, ast ×4, tree_sitter ×20}, document_loaders/pdf ×3, react_agent ×11, sync ×2, searcher ×1, sources_manifest ×5). 117 with default features, +20 with `tree-sitter`. 0 errors, 0 warnings.
 2. **CLI conformance**: Rust CLI options aligned with Python CLI (2026-02-19) — verified via `--help` output comparison
 3. **Integration tests**: 92 passing across 10 test files in leann-core. Coverage: core build/search pipeline (12 tests), provider-based search/warmup/factory (7 tests), metadata filtering with all 13 operators via BM25+filter e2e (16 tests), BM25/grep search via LeannSearcher (8 tests), document loading + AST chunking (17 tests), cross-implementation format compatibility (11 tests), file sync/Merkle tree (9 tests), chat/LLM pipeline (5 tests), embedding server manager lifecycle (5 tests), index file format validation (3 tests). All use FakeEmbeddingProvider for deterministic, network-free execution.
-4. **CLI/server tests**: 20 passing — CLI subprocess/help tests (10 in leann-cli, including warmup command and search warmup flag tests), CLI list/remove lifecycle (5 in leann-cli), HTTP server endpoints (4 in leann-server).
+4. **CLI/server tests**: 26 passing — CLI subprocess/help tests (10 in leann-cli, including warmup command and search warmup flag tests), CLI incremental build (6 in leann-cli), CLI list/remove lifecycle (5 in leann-cli), HTTP server endpoints (4 in leann-server).
 5. **Python binding tests**: `tests/test_bindings.py` — 34 pytest tests: import/introspection, constructor, error handling, integration (build_index_from_embeddings roundtrip), API compliance
 6. **Benchmark**: Criterion benchmark suite implemented (`cargo bench --package leann-core`) with 5 groups: distance computation (SIMD at 128/384/768 dims), HNSW build (100/1K/10K/50K), HNSW search (ef 16-256), HNSW search recompute (ef 16-256), full pipeline (build+write+read+search). JSON output binary with quantile tracking and RNG seed support for scripted comparison. Python FAISS comparison suite at `benchmarks/` with orchestration script (`benchmarks/compare_rust_python.sh`). See Benchmark Results below for detailed numbers.
 7. **Format compatibility**: 11 tests in `test_python_compat.rs` verify on-disk format matches Python expectations. `.meta.json`, `.passages.jsonl`, `.index` (FAISS binary), `.ids.txt` are all compatible. `.passages.idx` is incompatible (Rust text offsets vs Python pickle dict). See [RUST_API_COMPLIANCE.md](RUST_API_COMPLIANCE.md).
