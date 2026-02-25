@@ -2,7 +2,7 @@
 
 Comparison of Python test coverage (`tests/`) with Rust test coverage (`crates/leann-core/`, `crates/leann-cli/`, `crates/leann-server/`).
 
-**Rust totals: 243 tests (111 unit + 20 tree-sitter + 92 leann-core integration + 16 leann-cli + 4 leann-server), 0 failures.**
+**Rust totals: 251 tests (112 unit + 20 tree-sitter + 100 leann-core integration + 16 leann-cli + 4 leann-server), 0 failures.**
 
 ## Core Feature Tests
 
@@ -136,8 +136,9 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 | `test_sync.rs` | 9 | Merkle tree + FileSynchronizer |
 | `test_chat_pipeline.rs` | 5 | SimulatedChat LLM, LlmConfig |
 | `test_embedding_manager.rs` | 5 | EmbeddingServerManager lifecycle |
+| `test_fuzz_io.rs` | 8 | Fuzz-style HNSW I/O: random bytes, all-zeros, all-ones, header+garbage, bitflips, roundtrip standard/compact, ambiguous counts |
 | `test_index_format.rs` | 3 | Index meta schema validation |
-| **Subtotal** | **92** | |
+| **Subtotal** | **100** | |
 
 ### CLI Tests (leann-cli)
 
@@ -165,7 +166,7 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 | `react_agent.rs` | 11 | LLM response parsing, format_search_results |
 | `hnsw/build.rs` | 3 | Graph construction (serial + parallel) |
 | `hnsw/search.rs` | 2 | Search with stored vectors and recompute |
-| `hnsw/io.rs` | 1 | Compact index roundtrip |
+| `hnsw/io.rs` | 2 | Compact index roundtrip, standard format not misdetected as compact |
 | `hnsw/graph.rs` | 2 | Config defaults, FourCC constants |
 | `hnsw/csr.rs` | 1 | CSR conversion |
 | `chunking/mod.rs` | 2 | Basic chunking |
@@ -179,7 +180,7 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 | `sync.rs` | 2 | Hash data, Merkle tree |
 | `document_loaders/pdf.rs` | 3 | PDF extraction |
 | `searcher.rs` | 1 | SearcherOptions default |
-| **Subtotal** | **131** (111 default + 20 tree-sitter) | |
+| **Subtotal** | **132** (112 default + 20 tree-sitter) | |
 
 ---
 
@@ -219,8 +220,42 @@ These Python test files exercise core LEANN functionality that the Rust crate al
 | Index Format | — | 3 | Rust-only |
 | Python Format Compat | — | 11 | Rust-only (validates cross-impl format) |
 | Chat Pipeline | — | 5 | Rust-only |
-| HNSW Internals | — | 21 unit | Rust-only |
+| HNSW Internals | — | 22 unit | Rust-only |
+| HNSW I/O Fuzz | — | 8 integration | Rust-only (random bytes, bitflips, roundtrips) |
 | ReAct Agent | — | 11 unit | Rust-only |
 | HTTP Server | — | 4 | Rust-only |
 | Python-specific | 55+ | — | Not applicable |
-| **Total** | | **243** | |
+| **Total** | | **252** | |
+
+---
+
+## Fuzz Testing
+
+### Current: stable-compatible fuzz-style tests
+
+`test_fuzz_io.rs` runs on stable Rust in CI and exercises two invariants:
+
+1. **Arbitrary bytes → no panic.** `read_hnsw_index` must return `Err`, never panic, on any input that isn't a valid index. Tested via random bytes, all-zeros, all-ones, valid-header+garbage-body, and single bit-flips across a serialised index.
+2. **Roundtrip correctness.** Write → read → assert structural equivalence for randomly parameterised graphs (1–600 nodes, M 2–32, dim 1–256, L2/MIPS) in both standard and compact formats. Includes targeted cases where `offsets.len() % 256 == 1` (the ambiguous-count pattern that caused the original compact-detection false positive).
+
+These tests already caught two bugs during development:
+- Compact format false-positive when offsets count LSB == 0x01
+- OOM from uncapped allocation when `read_vec` trusts a garbage count
+
+### Future: `cargo fuzz` (nightly)
+
+`cargo-fuzz` (libFuzzer) provides coverage-guided fuzzing but requires `rustup install nightly` for `-Zsanitizer=address`. When nightly is available, two targets are worth adding:
+
+| Target | Description |
+|---|---|
+| `fuzz_read_hnsw` | Feed arbitrary bytes to `read_hnsw_index` — finds panics, overflows, OOM |
+| `fuzz_roundtrip` | Generate valid graphs via `Arbitrary`, write → read → assert equivalence |
+
+Setup:
+```bash
+rustup install nightly
+cd crates/leann-core
+cargo fuzz init
+# Add targets to fuzz/fuzz_targets/, then:
+cargo +nightly fuzz run fuzz_read_hnsw -- -max_len=4096 -runs=1000000
+```
