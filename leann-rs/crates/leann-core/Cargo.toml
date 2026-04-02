@@ -43,7 +43,7 @@ tree-sitter-typescript = { workspace = true, optional = true }
 tree-sitter-javascript = { workspace = true, optional = true }
 
 [features]
-default = ["chat", "embedding-remote", "parallel", "bm25", "watch", "pdf"]
+default = ["chat", "embedding-remote", "parallel", "bm25", "watch", "pdf", "multi-vector"]
 
 # PDF document loading
 pdf = ["dep:pdf-extract"]
@@ -59,6 +59,9 @@ parallel = ["dep:rayon"]
 
 # BM25 keyword search
 bm25 = []
+
+# Multi-vector (ColBERT) index support
+multi-vector = ["dep:memmap2"]
 
 # Merkle-tree incremental sync / file watching
 watch = ["dep:sha2"]
@@ -82,7 +85,7 @@ tree-sitter-typescript = ["dep:tree-sitter", "dep:tree-sitter-typescript"]
 tree-sitter-javascript = ["dep:tree-sitter", "dep:tree-sitter-javascript"]
 
 # Everything
-full = ["chat", "embedding-remote", "parallel", "bm25", "watch", "pdf", "tree-sitter"]
+full = ["chat", "embedding-remote", "parallel", "bm25", "watch", "pdf", "tree-sitter", "multi-vector"]
 
 [dev-dependencies]
 tempfile = "3"

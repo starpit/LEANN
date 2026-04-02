@@ -30,6 +30,8 @@ pub mod embedding;
 pub mod hnsw;
 pub mod index;
 pub(crate) mod metadata_filter;
+#[cfg(feature = "multi-vector")]
+pub mod multi_vector;
 pub mod passages;
 #[cfg(feature = "chat")]
 pub mod react_agent;
