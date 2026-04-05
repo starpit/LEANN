@@ -67,7 +67,11 @@ fn get_overlap_text(text: &str, overlap_chars: usize) -> String {
     if text.len() <= overlap_chars {
         return text.to_string();
     }
-    text[text.len() - overlap_chars..].to_string()
+    let mut start = text.len() - overlap_chars;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    text[start..].to_string()
 }
 
 #[cfg(test)]
